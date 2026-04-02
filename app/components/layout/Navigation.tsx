@@ -27,6 +27,7 @@ import {
 } from '@/hooks/useGlobalNotification'
 import { useTranslation } from 'react-i18next'
 import LanguageSwitcher from './LanguageSwitch'
+import { isNativeApp } from '@/utils/nativeBridge'
 import './Navigation.scss'
 /*
   Top navigation component for the application.
@@ -48,6 +49,7 @@ export default function Navigation() {
   const [showChangePasswordDialog, setShowChangePasswordDialog] = useState(false)
   const { showSuccessNotification } = useSuccessNotification()
   const { showErrorNotification } = useErrorNotification()
+
   // Close user menu when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -64,6 +66,9 @@ export default function Navigation() {
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [showUserMenu])
+
+  // Hide navigation in native app mode (hooks must be called unconditionally)
+  if (isNativeApp()) return null
 
   /*
     Handle clicks on the account button to toggle the user menu or open auth modal.

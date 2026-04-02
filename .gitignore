@@ -50,6 +50,9 @@ yarn-error.log*
 next-env.d.ts
 
 
+# Local AI project-progress notes (Sisyphus / similar)
+.sisyphus/
+
 # cursor IDE
 .cursor
 

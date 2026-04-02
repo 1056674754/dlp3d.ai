@@ -2,7 +2,7 @@
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
-import { env } from 'next-runtime-env'
+import { getEnv } from '@/utils/env'
 // Import language resource files directly
 import zhFronted from './locales/zh/fronted.json'
 import enFronted from './locales/en/fronted.json'
@@ -34,7 +34,7 @@ const resources = {
  * @returns {string} The default language code ('zh' or 'en').
  */
 const getDefaultLanguage = () => {
-  const envLang = env('NEXT_PUBLIC_LANGUAGE')
+  const envLang = getEnv('NEXT_PUBLIC_LANGUAGE')
   if (envLang === 'zh' || envLang === 'en') {
     return envLang
   }

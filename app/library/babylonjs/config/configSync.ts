@@ -1,5 +1,5 @@
 import { Logger } from '@/library/babylonjs/utils'
-import { env } from 'next-runtime-env'
+import { getEnv } from '@/utils/env'
 /**
  * Exception thrown when an invalid configuration key is used.
  */
@@ -48,28 +48,30 @@ export class ConfigSync {
   }
 
   private _updateFromEnv(): void {
-    this._config.orchestratorHost = env('NEXT_PUBLIC_ORCHESTRATOR_HOST')
+    this._config.orchestratorHost = getEnv('NEXT_PUBLIC_ORCHESTRATOR_HOST')
     this._config.orchestratorPort = parseInt(
-      env('NEXT_PUBLIC_ORCHESTRATOR_PORT') || '443',
+      getEnv('NEXT_PUBLIC_ORCHESTRATOR_PORT') || '443',
       10,
     )
-    this._config.orchestratorPathPrefix = env('NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX')
-    this._config.orchestratorTimeout = env('NEXT_PUBLIC_ORCHESTRATOR_TIMEOUT')
-    this._config.motionFileHost = env('NEXT_PUBLIC_BACKEND_HOST')
+    this._config.orchestratorPathPrefix = getEnv(
+      'NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX',
+    )
+    this._config.orchestratorTimeout = getEnv('NEXT_PUBLIC_ORCHESTRATOR_TIMEOUT')
+    this._config.motionFileHost = getEnv('NEXT_PUBLIC_BACKEND_HOST')
     this._config.motionFilePort = parseInt(
-      env('NEXT_PUBLIC_BACKEND_PORT') || '443',
+      getEnv('NEXT_PUBLIC_BACKEND_PORT') || '443',
       10,
     )
-    this._config.motionFilePathPrefix = env('NEXT_PUBLIC_BACKEND_PATH_PREFIX')
+    this._config.motionFilePathPrefix = getEnv('NEXT_PUBLIC_BACKEND_PATH_PREFIX')
     this._config.motionFileTimeout = parseInt(
-      env('NEXT_PUBLIC_MOTION_FILE_TIMEOUT') || '600',
+      getEnv('NEXT_PUBLIC_MOTION_FILE_TIMEOUT') || '600',
       10,
     )
     this._config.maxFrontExtensionDuration = parseFloat(
-      env('NEXT_PUBLIC_MAX_FRONT_EXTENSION_DURATION') || '0.0',
+      getEnv('NEXT_PUBLIC_MAX_FRONT_EXTENSION_DURATION') || '0.0',
     )
     this._config.maxRearExtensionDuration = parseFloat(
-      env('NEXT_PUBLIC_MAX_REAR_EXTENSION_DURATION') || '0.0',
+      getEnv('NEXT_PUBLIC_MAX_REAR_EXTENSION_DURATION') || '0.0',
     )
     this._config.language = localStorage.getItem('i18nextLng')
   }

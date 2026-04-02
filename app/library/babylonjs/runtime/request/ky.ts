@@ -1,54 +1,43 @@
 import ky from 'ky'
 import type { KyRequest, NormalizedOptions } from 'ky'
-import https from 'https'
-import { env } from 'next-runtime-env'
+import { getEnv } from '@/utils/env'
 
 /**
  * Environment variable for the orchestrator host.
  */
-const NEXT_PUBLIC_ORCHESTRATOR_HOST = env('NEXT_PUBLIC_ORCHESTRATOR_HOST')
+const NEXT_PUBLIC_ORCHESTRATOR_HOST = getEnv('NEXT_PUBLIC_ORCHESTRATOR_HOST')
 /**
  * Environment variable for the orchestrator port.
  */
-const NEXT_PUBLIC_ORCHESTRATOR_PORT = env('NEXT_PUBLIC_ORCHESTRATOR_PORT')
+const NEXT_PUBLIC_ORCHESTRATOR_PORT = getEnv('NEXT_PUBLIC_ORCHESTRATOR_PORT')
 /**
  * Environment variable for the orchestrator path prefix.
  */
-const NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX = env(
+const NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX = getEnv(
   'NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX',
 )
 /**
  * Environment variable for the backend host.
  */
-const NEXT_PUBLIC_BACKEND_HOST = env('NEXT_PUBLIC_BACKEND_HOST')
+const NEXT_PUBLIC_BACKEND_HOST = getEnv('NEXT_PUBLIC_BACKEND_HOST')
 /**
  * Environment variable for the backend port.
  */
-const NEXT_PUBLIC_BACKEND_PORT = env('NEXT_PUBLIC_BACKEND_PORT')
+const NEXT_PUBLIC_BACKEND_PORT = getEnv('NEXT_PUBLIC_BACKEND_PORT')
 /**
  * Environment variable for the backend path prefix.
  */
-const NEXT_PUBLIC_BACKEND_PATH_PREFIX = env('NEXT_PUBLIC_BACKEND_PATH_PREFIX')
-
-/**
- * HTTPS agent configuration that allows self-signed certificates.
- */
-const agent = new https.Agent({
-  rejectUnauthorized: false,
-})
+const NEXT_PUBLIC_BACKEND_PATH_PREFIX = getEnv('NEXT_PUBLIC_BACKEND_PATH_PREFIX')
 
 /**
  * Base configuration options for HTTP requests.
  *
- * Contains common settings including timeout, headers, HTTPS agent, and response hooks.
+ * Contains common settings including timeout, headers, and response hooks.
  */
 const baseOptions = {
   timeout: 180000,
   headers: {
     'Content-Type': 'application/json',
-  },
-  agent: {
-    https: agent,
   },
   hooks: {
     afterResponse: [

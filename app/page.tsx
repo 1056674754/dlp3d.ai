@@ -12,6 +12,7 @@ import BabylonViewer, { BabylonViewerRef } from './components/ui/BabylonViewer'
 import LoadingScreen from './components/LoadingScreen'
 import '@/styles/components.css'
 import { captureScreenshot, saveScreenshotToStorage } from '@/utils/screenshot'
+import { isNativeApp, patchWindowOpen } from '@/utils/nativeBridge'
 
 import ConfigSidebar from './components/sidebar'
 import LeftSidebar from './components/setting'
@@ -130,6 +131,12 @@ export default function Home() {
 
   useEffect(() => {
     dispatch(setAuthState(loadAuthStateFromStorage()))
+  }, [])
+
+  useEffect(() => {
+    if (isNativeApp()) {
+      patchWindowOpen()
+    }
   }, [])
 
   useEffect(() => {
@@ -361,7 +368,7 @@ export default function Home() {
    * @returns JSX.Element | null The button or null when hidden on mobile during startup.
    */
   const ChatButton = useCallback(() => {
-    if (isChatStarting || (isMobile && isLogin)) return null
+    if (isChatStarting || (isMobile && isLogin) || isNativeApp()) return null
     return (
       <div className="button-group-container">
         <button
@@ -516,7 +523,7 @@ export default function Home() {
           <div className="hero-content"> </div>
         </div>
       </div>
-      {!isChatStarting && isLogin && (
+      {!isChatStarting && isLogin && !isNativeApp() && (
         <>
           <LeftSidebar />
           <ConfigSidebar

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { TTS_VOICE_OPTIONS } from '@/constants/index'
 import React from 'react' // Added for React.isValidElement
-import { env } from 'next-runtime-env'
+import { getEnv } from '@/utils/env'
 // Interface definitions for API response types
 interface TTSVoicesApiResponse {
   voice_names: Record<string, string> // Actually returns strings, not objects
@@ -21,12 +21,11 @@ interface UseTTSVoicesReturn {
   refetch: () => void
 }
 
-// Base API URL following existing pattern from TTSAdapterContext
-const NEXT_PUBLIC_ORCHESTRATOR_HOST = env('NEXT_PUBLIC_ORCHESTRATOR_HOST')
-const NEXT_PUBLIC_ORCHESTRATOR_PORT = env('NEXT_PUBLIC_ORCHESTRATOR_PORT')
-const NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX = env(
-  'NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX',
-)
+// Lazy getters for env vars — avoids reading window.__DLP3D_ENV__ at module-import time
+const getOrchestratorHost = () => getEnv('NEXT_PUBLIC_ORCHESTRATOR_HOST')
+const getOrchestratorPort = () => getEnv('NEXT_PUBLIC_ORCHESTRATOR_PORT')
+const getOrchestratorPathPrefix = () =>
+  getEnv('NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX')
 
 const API_TIMEOUT = 10000 // 10 second timeout
 
@@ -61,7 +60,7 @@ async function fetchTTSVoices(
   ttsName: string,
   signal?: AbortSignal,
 ): Promise<VoiceOption[]> {
-  const url = `https://${NEXT_PUBLIC_ORCHESTRATOR_HOST}:${NEXT_PUBLIC_ORCHESTRATOR_PORT}${NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX}/tts_voice_names/${ttsName}`
+  const url = `https://${getOrchestratorHost()}:${getOrchestratorPort()}${getOrchestratorPathPrefix()}/tts_voice_names/${ttsName}`
 
   try {
     const controller = new AbortController()

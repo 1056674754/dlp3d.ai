@@ -1,5 +1,5 @@
 import { getBrowserTimeZone } from '@/utils/timeZone'
-import { env } from 'next-runtime-env'
+import { getEnv } from '@/utils/env'
 
 /*
   Determine whether the user's location is within Mainland China or Hong Kong.
@@ -60,7 +60,7 @@ export const checkLocation = () => {
   @returns boolean True if the env NEXT_PUBLIC_ORCHESTRATOR_HOST contains 'sensetime'.
 */
 export const isSensetimeOrchestrator = () => {
-  const NEXT_PUBLIC_ORCHESTRATOR_HOST = env('NEXT_PUBLIC_ORCHESTRATOR_HOST')
+  const NEXT_PUBLIC_ORCHESTRATOR_HOST = getEnv('NEXT_PUBLIC_ORCHESTRATOR_HOST')
   if (!NEXT_PUBLIC_ORCHESTRATOR_HOST) {
     return false
   }

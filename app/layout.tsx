@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from 'next'
-import { Inter, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 
 import ReduxProvider from './components/providers/ReduxProvider'
@@ -9,17 +8,6 @@ import NotificationProvider from './components/common/GlobalNotification'
 import ErrorToast from './components/ui/ErrorToast'
 import CenterLeftMessages from './components/ui/CenterLeftMessages'
 import I18nProvider from './components/providers/I18nProvider'
-import { PublicEnvScript } from 'next-runtime-env'
-
-const inter = Inter({
-  variable: '--font-inter',
-  subsets: ['latin'],
-})
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: '--font-jetbrains-mono',
-  subsets: ['latin'],
-})
 
 /**
  * Application metadata configuration.
@@ -65,6 +53,10 @@ export default function RootLayout({
           crossOrigin="anonymous"
         />
         <link
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+          rel="stylesheet"
+        />
+        <link
           href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap"
           rel="stylesheet"
         />
@@ -80,29 +72,30 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap"
           rel="stylesheet"
         />
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.6.2/dat.gui.min.js"></script>
-        <script src="https://assets.babylonjs.com/generated/Assets.js"></script>
-        <script src="https://cdn.babylonjs.com/recast.js"></script>
-        <script src="https://cdn.babylonjs.com/ammo.js"></script>
-        <script src="https://cdn.babylonjs.com/havok/HavokPhysics_umd.js"></script>
-        <script src="https://cdn.babylonjs.com/cannon.js"></script>
-        <script src="https://cdn.babylonjs.com/Oimo.js"></script>
-        <script src="https://cdn.babylonjs.com/earcut.min.js"></script>
-        <script src="https://cdn.babylonjs.com/babylon.js"></script>
-        <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
-        <script src="https://cdn.babylonjs.com/proceduralTexturesLibrary/babylonjs.proceduralTextures.min.js"></script>
-        <script src="https://cdn.babylonjs.com/postProcessesLibrary/babylonjs.postProcess.min.js"></script>
-        <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.js"></script>
-        <script src="https://cdn.babylonjs.com/serializers/babylonjs.serializers.min.js"></script>
-        <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
-        <script src="https://cdn.babylonjs.com/inspector/babylon.inspector.bundle.js"></script>
-        <PublicEnvScript />
+        <script src="/scripts/dat.gui.min.js"></script>
+        <script src="/scripts/Assets.js"></script>
+        <script src="/scripts/recast.js"></script>
+        <script src="/scripts/ammo.js"></script>
+        <script src="/scripts/HavokPhysics_umd.js"></script>
+        <script src="/scripts/cannon.js"></script>
+        <script src="/scripts/Oimo.js"></script>
+        <script src="/scripts/earcut.min.js"></script>
+        <script src="/scripts/babylon.js"></script>
+        <script src="/scripts/babylonjs.materials.min.js"></script>
+        <script src="/scripts/babylonjs.proceduralTextures.min.js"></script>
+        <script src="/scripts/babylonjs.postProcess.min.js"></script>
+        <script src="/scripts/babylonjs.loaders.js"></script>
+        <script src="/scripts/babylonjs.serializers.min.js"></script>
+        <script src="/scripts/babylon.gui.min.js"></script>
+        <script src="/scripts/babylon.inspector.bundle.js"></script>
+        <script src="/env.js" />
       </head>
       <body
-        className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}
+        className="antialiased"
         suppressHydrationWarning={true}
         style={{
           backgroundColor: '#000000 !important',
+          fontFamily: "'Inter', sans-serif",
         }}
       >
         <ReduxProvider>

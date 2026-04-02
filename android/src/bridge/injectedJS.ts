@@ -77,6 +77,34 @@ export function createInjectedJavaScript(config: {
 
       // Notify RN that bridge is ready
       window.NativeAPI.notifyReady();
+
+      // WebGL context loss monitoring
+      (function monitorWebGL() {
+        var checkInterval = setInterval(function() {
+          var canvases = document.querySelectorAll('canvas');
+          if (canvases.length > 0) {
+            clearInterval(checkInterval);
+            canvases.forEach(function(canvas) {
+              canvas.addEventListener('webglcontextlost', function(e) {
+                e.preventDefault();
+                window.NativeAPI.notifyLoading(true, 0, 'Restoring WebGL context...');
+                setTimeout(function() {
+                  var gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+                  if (gl) {
+                    window.NativeAPI.notifyLoading(false);
+                  } else {
+                    window.NativeAPI.notifyError('WebGL context lost and could not be restored', 'WEBGL_LOST');
+                  }
+                }, 2000);
+              }, false);
+              canvas.addEventListener('webglcontextrestored', function() {
+                window.NativeAPI.notifyLoading(false);
+              }, false);
+            });
+          }
+        }, 500);
+        setTimeout(function() { clearInterval(checkInterval); }, 30000);
+      })();
     })();
     true;
   `;
