@@ -16,6 +16,9 @@ export function SplashScreen() {
         color={theme.colors.primary}
         style={styles.loader}
       />
+      <Text style={[styles.hint, { color: theme.colors.onSurface }]}>
+        Loading…
+      </Text>
     </View>
   );
 }
@@ -38,5 +41,10 @@ const styles = StyleSheet.create({
   },
   loader: {
     marginTop: 40,
+  },
+  hint: {
+    marginTop: 16,
+    fontSize: 14,
+    opacity: 0.6,
   },
 });

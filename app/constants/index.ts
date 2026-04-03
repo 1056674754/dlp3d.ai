@@ -55,6 +55,9 @@ export const marks = [
     label: '2.0x',
   },
 ]
+/** 与 `CHARACTER_FILENAMES`（`app/utils/nativeAssets.ts`）下标一致；默认 KQ（KQ-default_420.glb） */
+export const DEFAULT_CHARACTER_MODEL_INDEX = 1
+
 // Character Models Data - 按模型类型分类
 export const CHARACTER_MODELS = [
   {

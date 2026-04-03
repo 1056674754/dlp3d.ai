@@ -1,10 +1,11 @@
+import { useCallback } from 'react'
 import { useErrorNotification } from './useGlobalNotification'
 
 import { useSelector, useDispatch } from 'react-redux'
 
 import { getUserInfo, getIsLogin } from '@/features/auth/authStore'
 
-import { CHARACTER_MODELS } from '@/constants/index'
+import { CHARACTER_MODELS, DEFAULT_CHARACTER_MODEL_INDEX } from '@/constants/index'
 import {
   getChatList,
   getSelectedChat,
@@ -30,6 +31,7 @@ import {
   fetchUpdateUserConfig,
   getAvailableLlm,
   fetchUpdateName,
+  fetchUpdateAvatar,
 } from '@/request/api'
 import { useTranslation } from 'react-i18next'
 
@@ -76,8 +78,9 @@ export function usePromptingSettings() {
       dispatch(setSelectedCharacterId(id))
       localStorage.setItem('dlp_selected_character_id', id)
       const index = CHARACTER_MODELS.findIndex(i => i.name === character.avatar)
-      if (index !== selectedModelIndex) {
-        dispatch(setSelectedModelIndex(index))
+      const resolvedIndex = index >= 0 ? index : DEFAULT_CHARACTER_MODEL_INDEX
+      if (resolvedIndex !== selectedModelIndex) {
+        dispatch(setSelectedModelIndex(resolvedIndex))
       }
     } catch (error) {
       showErrorNotification(error, t('notification.loadCharacterFailed'))
@@ -114,6 +117,37 @@ export function usePromptingSettings() {
       showErrorNotification(t('notification.deleteCharacterFailed'))
     }
   }
+
+  /** Duplicate first character, set avatar by model index, then select (for native “new chat”). */
+  const createChatFromTemplate = useCallback(
+    async (modelIndex: number) => {
+      if (!user?.id || !characters.length) return
+      const templateId = characters[0].character_id
+      try {
+        const { character_id: newId } = await duplicateCharacter({
+          user_id: user.id,
+          character_id: templateId,
+        })
+        const model =
+          CHARACTER_MODELS[modelIndex] ??
+          CHARACTER_MODELS[DEFAULT_CHARACTER_MODEL_INDEX]
+        await fetchUpdateAvatar(user.id, newId, model.name)
+        await loadUserCharacters()
+        await selectCharacter(newId)
+      } catch (error) {
+        showErrorNotification(error, t('notification.loadCharacterFailed'))
+      }
+    },
+    [
+      user?.id,
+      characters,
+      loadUserCharacters,
+      selectCharacter,
+      showErrorNotification,
+      t,
+    ],
+  )
+
   const updateUserConfig = async (key: string, value: any) => {
     if (!user?.id) {
       showErrorNotification(t('notification.logInToUpdateUserConfig'))
@@ -225,6 +259,16 @@ export function usePromptingSettings() {
     const selectedCharacter = await getCharacterConfig(user.id, selectedCharacterId!)
     dispatch(setSelectedChat(selectedCharacter))
   }
+  const refreshSelectedCharacter = useCallback(async () => {
+    if (!user?.id || !selectedCharacterId) return
+    const character = await getCharacterConfig(user.id, selectedCharacterId)
+    dispatch(setSelectedChat(character))
+    const index = CHARACTER_MODELS.findIndex(i => i.name === character.avatar)
+    if (index !== -1 && index !== selectedModelIndex) {
+      dispatch(setSelectedModelIndex(index))
+    }
+  }, [user?.id, selectedCharacterId, selectedModelIndex, dispatch])
+
   const updateCharacterName = async (id: string, name: string) => {
     if (!user?.id) {
       showErrorNotification(t('notification.logInToUpdateCharacterName'))
@@ -247,6 +291,8 @@ export function usePromptingSettings() {
     selectCharacter,
     deleteCharacter,
     loadUserCharacters,
+    refreshSelectedCharacter,
+    createChatFromTemplate,
     updateCharacter,
     copyCharacter,
     updateUserConfig,

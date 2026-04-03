@@ -40,13 +40,60 @@ import {
   StackPanel,
   Image,
 } from '@babylonjs/gui'
-import {
-  loadGroundMesh,
-  loadGroundMeshWithPreset,
-  loadGroundMeshForHDR,
-} from '../../library/babylonjs/utils/loadMesh'
+import { loadGroundMeshForHDR } from '../../library/babylonjs/utils/loadMesh'
 import { LoadingProgressManager } from '../../utils/progressManager'
 import { HDRI_SCENES } from '@/library/babylonjs/config/scene'
+import { getCharacterModelUrl, resolveHdriUrl } from '@/utils/nativeAssets'
+import { createStartupSpan, logStartupEvent } from '@/utils/startupProfiler'
+
+function waitForNextFrames(frameCount: number): Promise<void> {
+  let remaining = Math.max(1, frameCount)
+  return new Promise(resolve => {
+    const step = () => {
+      remaining -= 1
+      if (remaining <= 0) {
+        resolve()
+        return
+      }
+      requestAnimationFrame(step)
+    }
+    requestAnimationFrame(step)
+  })
+}
+
+function waitForTextureReady(texture: EquiRectangularCubeTexture): Promise<void> {
+  if (texture.isReady()) {
+    return Promise.resolve()
+  }
+  const observableTexture = texture as EquiRectangularCubeTexture & {
+    onLoadObservable?: {
+      add: (callback: () => void) => unknown
+      remove: (observer: unknown) => void
+    }
+  }
+  return new Promise(resolve => {
+    let observer: unknown = null
+    const finish = () => {
+      if (observer && observableTexture.onLoadObservable) {
+        observableTexture.onLoadObservable.remove(observer)
+        observer = null
+      }
+      resolve()
+    }
+    if (!observableTexture.onLoadObservable) {
+      const retry = () => {
+        if (texture.isReady()) {
+          finish()
+          return
+        }
+        window.setTimeout(retry, 16)
+      }
+      retry()
+      return
+    }
+    observer = observableTexture.onLoadObservable.add(() => finish())
+  })
+}
 /**
  * Props interface for the BabylonViewer component.
  */
@@ -59,7 +106,7 @@ interface BabylonViewerProps {
   className?: string
   /** sceneName for scenes, defaults to 'Vast' */
   sceneName?: string
-  /** Index of the selected character model, defaults to 0 */
+  /** Index of the selected character model, defaults to 1 (KQ-default) */
   selectedCharacter?: number
   /** Key to trigger character change, defaults to 0 */
   characterChangeKey?: number
@@ -102,7 +149,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
       height = '400px',
       className = '',
       sceneName = 'Vast',
-      selectedCharacter = 0,
+      selectedCharacter = 1,
       characterChangeKey = 0,
       onCharacterLoaded,
       onSceneLoaded,
@@ -119,6 +166,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
     const dlpPatchRef = useRef<Mesh | null>(null)
     const shadowGeneratorRef = useRef<ShadowGenerator | null>(null)
     const currentGroundMeshRef = useRef<Mesh | null>(null)
+    const fallbackGroundRef = useRef<Mesh | null>(null)
     const characterRootRef = useRef<TransformNode | null>(null)
     const lastAnimationGroupsRef = useRef<AnimationGroup[] | null>(null)
     const loadVersionRef = useRef<number>(0)
@@ -264,6 +312,45 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
       })
     }, [])
 
+    const createStartupGround = useCallback(
+      (scene: Scene, sceneConfig: (typeof HDRI_SCENES)[number]) => {
+        if (fallbackGroundRef.current) {
+          return fallbackGroundRef.current
+        }
+        const ground = MeshBuilder.CreateGround(
+          `startup-ground-${sceneConfig.name}`,
+          { width: 18, height: 18, subdivisions: 1 },
+          scene,
+        )
+        const material = new StandardMaterial(
+          `startup-ground-material-${sceneConfig.name}`,
+          scene,
+        )
+        material.diffuseColor =
+          sceneConfig.name === 'Vast'
+            ? new Color3(0.11, 0.12, 0.15)
+            : new Color3(0.16, 0.16, 0.19)
+        material.specularColor = new Color3(0, 0, 0)
+        material.alpha = 0.92
+        ground.material = material
+        ground.isPickable = false
+        ground.receiveShadows = true
+        if (sceneConfig.groundModel) {
+          ground.position = sceneConfig.groundModel.translation.clone()
+          ground.rotation = new Vector3(
+            Tools.ToRadians(sceneConfig.groundModel.rotation.x),
+            Tools.ToRadians(sceneConfig.groundModel.rotation.y),
+            Tools.ToRadians(sceneConfig.groundModel.rotation.z),
+          )
+        } else {
+          ground.position = new Vector3(0, -0.02, 0)
+        }
+        fallbackGroundRef.current = ground
+        return ground
+      },
+      [],
+    )
+
     /**
      * Load a character model by index with animation and effects.
      *
@@ -272,6 +359,9 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
     const loadCharacter = useCallback(
       async (characterIndex: number) => {
         if (!sceneRef.current) return
+        const finishCharacterLoad = createStartupSpan('babylon.character-load', {
+          characterIndex,
+        })
 
         try {
           // Increment version to invalidate any in-flight loads
@@ -319,12 +409,14 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
             5: 'NXD-default_321.glb',
           }
 
-          const characterFile = character_index_file_name_mapping[characterIndex]
-
+          const modelUrl = getCharacterModelUrl(characterIndex)
+          const slash = modelUrl.lastIndexOf('/')
+          const rootUrl = modelUrl.slice(0, slash + 1)
+          const meshFile = modelUrl.slice(slash + 1)
           const result = await SceneLoader.ImportMeshAsync(
             '',
-            '/characters/',
-            characterFile,
+            rootUrl,
+            meshFile,
             sceneRef.current,
           )
 
@@ -345,6 +437,9 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
                 } catch (_) {}
               })
             } catch (_) {}
+            finishCharacterLoad({
+              stale: true,
+            })
             return
           }
 
@@ -471,9 +566,20 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
                 mesh.material.backFaceCulling = false
               }
             })
+            finishCharacterLoad({
+              meshCount: result.meshes.length,
+              animationGroupCount: result.animationGroups.length,
+            })
             if (onCharacterLoaded) onCharacterLoaded()
+          } else {
+            finishCharacterLoad({
+              meshCount: 0,
+            })
           }
         } catch (error) {
+          finishCharacterLoad({
+            failed: true,
+          })
           console.error('Error loading character:', error)
 
           // Fallback: create a simple placeholder
@@ -596,13 +702,21 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
     useEffect(() => {
       if (!canvasRef.current) return
 
+      logStartupEvent('babylon.viewer-mounted')
+
       // Initialize LoadingProgressManager
       LoadingProgressManager.getInstance().reset()
 
       // Initialize Babylon.js engine if it doesn't exist
       if (!engineRef.current) {
-        engineRef.current = new Engine(canvasRef.current, true)
-        engineRef.current.hideLoadingUI() // Immediately hide Babylon default loading UI
+        engineRef.current = new Engine(canvasRef.current, true, {
+          preserveDrawingBuffer: true,
+          stencil: true,
+          antialias: true,
+          powerPreference: 'high-performance',
+          adaptToDeviceRatio: true,
+        })
+        engineRef.current.hideLoadingUI()
       }
       const engine = engineRef.current
 
@@ -838,12 +952,18 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
           hdrTextureRef.current.dispose()
         }
         const sceneConfig = HDRI_SCENES.find(scene => scene.name === sceneName)!
-        const image = `/img/hdr/${sceneConfig.hdri}`
+        const image = resolveHdriUrl(sceneConfig.hdri)
+        const pathname =
+          typeof window !== 'undefined' ? window.location.pathname : ''
+        const isHomepageDefaultScene =
+          (pathname === '/' || pathname.endsWith('/index.html')) &&
+          sceneConfig.name === 'Vast'
+        const hdrTextureSize = isHomepageDefaultScene ? 512 : 1024
 
         const newHdrTexture = new EquiRectangularCubeTexture(
           image,
           sceneRef.current,
-          1024,
+          hdrTextureSize,
         )
         sceneRef.current.environmentTexture = newHdrTexture
 
@@ -880,6 +1000,10 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
             currentGroundMeshRef.current.dispose()
           }
           currentGroundMeshRef.current = null
+        }
+        if (fallbackGroundRef.current) {
+          fallbackGroundRef.current.dispose()
+          fallbackGroundRef.current = null
         }
 
         // Clean up all possible ground-related models
@@ -920,45 +1044,118 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
           }
         })
 
-        // Load corresponding ground model and await full scene readiness before signaling loaded
+        logStartupEvent('babylon.scene-change', {
+          sceneName,
+          homepageDefaultScene: isHomepageDefaultScene,
+        })
+
+        // Load corresponding ground model and split visual-ready from full-ready.
         const run = async () => {
-          try {
-            const sceneConfig = HDRI_SCENES.find(scene => scene.name === sceneName)!
-            const meshes = await loadGroundMeshForHDR(
-              sceneRef.current!,
-              sceneConfig.groundModel!.filename,
-              sceneConfig.groundModel!.translation,
-              sceneConfig.groundModel!.rotation,
-              sceneConfig.groundModel!.scale,
-              true,
-            )
-            // Only save the first Mesh type mesh
-            if (meshes && meshes.length > 0) {
-              const mesh = meshes.find(m => m instanceof Mesh)
-              if (mesh) currentGroundMeshRef.current = mesh as Mesh
+          let didNotifyVisualReady = false
+          const finishHdrLoad = createStartupSpan('babylon.scene.hdr', {
+            sceneName,
+            textureSize: hdrTextureSize,
+          })
+          const finishGroundLoad = createStartupSpan('babylon.scene.ground', {
+            sceneName,
+            deferred: true,
+          })
+          const finishWhenReady = createStartupSpan('babylon.scene.when-ready', {
+            sceneName,
+          })
+          const notifyVisualReady = (phase: 'startup-ground' | 'hdr') => {
+            if (didNotifyVisualReady || canceled) {
+              return
             }
-          } catch (error) {
-            console.warn(
-              `Failed to load ground model for ${sceneName}, nothing will be shown:`,
-              error,
-            )
-            // No longer create fallback platform box
-            currentGroundMeshRef.current = null
-          }
-
-          // Await entire scene readiness (HDR, skybox, materials, textures)
-          try {
-            await sceneRef.current!.whenReadyAsync()
-          } catch (_) {
-            // ignore
-          }
-
-          // Small 2-frame delay to avoid flicker
-          await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-          await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-
-          if (!canceled) {
+            didNotifyVisualReady = true
+            logStartupEvent('babylon.scene.visual-ready', {
+              sceneName,
+              homepageDefaultScene: isHomepageDefaultScene,
+              phase,
+            })
             onSceneLoaded?.()
+          }
+
+          try {
+            if (isHomepageDefaultScene) {
+              createStartupGround(sceneRef.current!, sceneConfig)
+              logStartupEvent('babylon.scene.startup-ground-ready', {
+                sceneName,
+              })
+              await waitForNextFrames(1)
+              notifyVisualReady('startup-ground')
+            }
+
+            await waitForTextureReady(newHdrTexture)
+            finishHdrLoad()
+
+            const groundModel = sceneConfig.groundModel
+            const groundPromise = groundModel
+              ? (async () => {
+                  try {
+                    const meshes = await loadGroundMeshForHDR(
+                      sceneRef.current!,
+                      groundModel.filename,
+                      groundModel.translation,
+                      groundModel.rotation,
+                      groundModel.scale,
+                      true,
+                    )
+                    if (canceled) {
+                      meshes.forEach(mesh => mesh.dispose())
+                      finishGroundLoad({ canceled: true })
+                      return
+                    }
+                    if (meshes && meshes.length > 0) {
+                      const mesh = meshes.find(m => m instanceof Mesh)
+                      if (mesh) currentGroundMeshRef.current = mesh as Mesh
+                    }
+                    if (fallbackGroundRef.current) {
+                      fallbackGroundRef.current.dispose()
+                      fallbackGroundRef.current = null
+                    }
+                    finishGroundLoad({
+                      meshCount: meshes.length,
+                    })
+                  } catch (error) {
+                    finishGroundLoad({
+                      failed: true,
+                    })
+                    console.warn(
+                      `Failed to load ground model for ${sceneName}, keeping lightweight ground:`,
+                      error,
+                    )
+                    currentGroundMeshRef.current = null
+                  }
+                })()
+              : Promise.resolve()
+
+            void (async () => {
+              try {
+                await sceneRef.current!.whenReadyAsync()
+                finishWhenReady()
+              } catch (_) {
+                finishWhenReady({ failed: true })
+              }
+            })()
+
+            if (!isHomepageDefaultScene) {
+              await waitForNextFrames(2)
+              notifyVisualReady('hdr')
+            }
+
+            await groundPromise
+          } catch (error) {
+            finishHdrLoad({
+              failed: true,
+            })
+            finishGroundLoad({
+              skipped: true,
+            })
+            finishWhenReady({
+              skipped: true,
+            })
+            console.warn(`Failed to prepare scene ${sceneName}:`, error)
           }
         }
 
@@ -973,7 +1170,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
       loadGroundMeshForHDR,
       currentGroundMeshRef,
       onSceneLoaded,
-      onCharacterLoaded,
+      createStartupGround,
     ])
 
     /**

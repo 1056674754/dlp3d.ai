@@ -39,6 +39,7 @@ import {
   EyeTrackingController,
 } from '@/library/babylonjs/runtime/character'
 import { loadGroundMesh, loadGroundMeshWithPreset } from '@/library/babylonjs/utils'
+import { getGroundRootUrl, resolveHdriUrl } from '@/utils/nativeAssets'
 import { PhysicsViewer } from '@babylonjs/core/Debug/physicsViewer'
 import {
   getRelationship,
@@ -414,7 +415,7 @@ export class StateMachine {
           // Load specific ground model for this scene
           await loadGroundMesh(
             this._globalState.scene,
-            '/models/ground/',
+            getGroundRootUrl(),
             groundConfig.filename,
             groundConfig.translation,
             groundConfig.rotation,
@@ -435,7 +436,7 @@ export class StateMachine {
     const loadHDREnvironment = (hdriFileName: string) => {
       try {
         const hdrTexture = new BABYLON.EquiRectangularCubeTexture(
-          `/img/hdr/${hdriFileName}`,
+          resolveHdriUrl(hdriFileName),
           this._globalState.scene,
           1024,
         )

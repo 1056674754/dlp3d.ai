@@ -31,7 +31,7 @@ const initialState: ChatState = {
   isSceneLoading: true,
   isSliderOpen: false,
   isLeftSliderOpen: false,
-  loadingProgress: 100,
+  loadingProgress: 0,
 
   chatList: [],
   selectedChat: null,

@@ -27,7 +27,7 @@ import {
 } from '@/hooks/useGlobalNotification'
 import { useTranslation } from 'react-i18next'
 import LanguageSwitcher from './LanguageSwitch'
-import { isNativeApp } from '@/utils/nativeBridge'
+import { shouldHideWebAuthChrome } from '@/utils/nativeBridge'
 import './Navigation.scss'
 /*
   Top navigation component for the application.
@@ -66,9 +66,6 @@ export default function Navigation() {
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [showUserMenu])
-
-  // Hide navigation in native app mode (hooks must be called unconditionally)
-  if (isNativeApp()) return null
 
   /*
     Handle clicks on the account button to toggle the user menu or open auth modal.
@@ -195,6 +192,8 @@ export default function Navigation() {
   const handleLogoClick = () => {
     window.location.href = '/'
   }
+
+  if (shouldHideWebAuthChrome()) return null
 
   return (
     <>

@@ -1,7 +1,18 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { REHYDRATE } from 'redux-persist';
 
 export interface AppState {
+  /** API / 业务后端（LLM 等） */
   serverUrl: string;
+  /**
+   * 角色 GLB 静态根 URL（与 `public/characters/` 同路径结构）。空字符串表示沿用 serverUrl。
+   * 可与 API 不同机 / 不同 CDN。
+   */
+  characterAssetsBaseUrl: string;
+  /**
+   * 地面 GLB + HDR 静态根 URL（`public/models/ground/`、`public/img/hdr/`）。空则沿用 serverUrl。
+   */
+  sceneAssetsBaseUrl: string;
   language: 'en' | 'zh';
   theme: 'light' | 'dark';
   isWebViewReady: boolean;
@@ -9,6 +20,8 @@ export interface AppState {
 
 const initialState: AppState = {
   serverUrl: 'https://dlp3d.s-s.city',
+  characterAssetsBaseUrl: '',
+  sceneAssetsBaseUrl: '',
   language: 'en',
   theme: 'dark',
   isWebViewReady: false,
@@ -21,6 +34,12 @@ export const appSlice = createSlice({
     setServerUrl: (state, { payload }: PayloadAction<string>) => {
       state.serverUrl = payload;
     },
+    setCharacterAssetsBaseUrl: (state, { payload }: PayloadAction<string>) => {
+      state.characterAssetsBaseUrl = payload;
+    },
+    setSceneAssetsBaseUrl: (state, { payload }: PayloadAction<string>) => {
+      state.sceneAssetsBaseUrl = payload;
+    },
     setLanguage: (state, { payload }: PayloadAction<'en' | 'zh'>) => {
       state.language = payload;
     },
@@ -31,15 +50,41 @@ export const appSlice = createSlice({
       state.isWebViewReady = payload;
     },
   },
+  extraReducers: builder => {
+    /** 旧版持久化里没有新字段时合并 initialState，避免 characterAssetsBaseUrl 等为 undefined */
+    builder.addCase(REHYDRATE, (state, action) => {
+      const payload = (action as { payload?: { app?: Partial<AppState> } })
+        .payload;
+      const incoming = payload?.app;
+      if (incoming) {
+        return { ...initialState, ...incoming };
+      }
+      return state ?? initialState;
+    });
+  },
   selectors: {
     getServerUrl: state => state.serverUrl,
+    getCharacterAssetsBaseUrl: state => state.characterAssetsBaseUrl,
+    getSceneAssetsBaseUrl: state => state.sceneAssetsBaseUrl,
     getLanguage: state => state.language,
     getTheme: state => state.theme,
     getIsWebViewReady: state => state.isWebViewReady,
   },
 });
 
-export const { setServerUrl, setLanguage, setTheme, setIsWebViewReady } =
-  appSlice.actions;
-export const { getServerUrl, getLanguage, getTheme, getIsWebViewReady } =
-  appSlice.selectors;
+export const {
+  setServerUrl,
+  setCharacterAssetsBaseUrl,
+  setSceneAssetsBaseUrl,
+  setLanguage,
+  setTheme,
+  setIsWebViewReady,
+} = appSlice.actions;
+export const {
+  getServerUrl,
+  getCharacterAssetsBaseUrl,
+  getSceneAssetsBaseUrl,
+  getLanguage,
+  getTheme,
+  getIsWebViewReady,
+} = appSlice.selectors;

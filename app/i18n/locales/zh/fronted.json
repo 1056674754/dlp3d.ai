@@ -15,7 +15,12 @@
     "title": "数字生命计划",
     "subTitle": "开源3D自主角色",
     "message": "加载中...",
-    "initializingScene": "正在初始化场景..."
+    "initializingScene": "正在初始化场景...",
+    "bootingApp": "正在启动数字生命...",
+    "characterReady": "角色主体已就绪，正在点亮场景...",
+    "finalizingScene": "正在进行最后准备...",
+    "firstLaunchHint": "首次启动通常会更慢一些，系统正在准备模型与场景资源，请保持当前页面。",
+    "readyHint": "加载即将完成，角色马上出现。"
   },
   "nav": {
     "title": "数字生命计划 2",

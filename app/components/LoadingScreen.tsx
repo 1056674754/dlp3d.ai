@@ -15,6 +15,8 @@ interface LoadingScreenProps {
   message?: string
   /** Optional progress percentage (0-100) for the progress bar. */
   progress?: number
+  /** Optional secondary hint shown below the main message. */
+  hint?: string
 }
 
 /**
@@ -33,6 +35,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({
   onComplete,
   message,
   progress,
+  hint,
 }) => {
   const { isMobile } = useDevice()
   const { t } = useTranslation()
@@ -87,6 +90,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({
 
   if (!visible) return null
 
+  const progressValue = Math.max(0, Math.min(100, Math.round(progress ?? 0)))
+  const progressLabel = `${progressValue}%`
+  const messageText = message || t('loading.message')
+
   return (
     <div className={`loading-screen${fadeOut ? ' fade-out' : ''}`}>
       {/* Background particle effects */}
@@ -116,18 +123,20 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({
           <span className="title-main">{t('loading.title')}</span>
           <span className="title-sub">{t('loading.subTitle')}</span>
         </h1>
-        <div
-          className="loading-progress-bar"
-          style={{ width: isMobile ? '400px' : '800px', height: '10px' }}
-        >
-          <div
-            className="loading-progress-fill"
-            style={{ width: `${progress}%` }}
-          ></div>
+        <div className={`loading-progress-shell${isMobile ? ' mobile' : ''}`}>
+          <div className="loading-progress-meta">
+            <span className="loading-progress-label">{progressLabel}</span>
+          </div>
+          <div className="loading-progress-bar">
+            <div
+              className="loading-progress-fill"
+              style={{ width: `${progressValue}%` }}
+            ></div>
+          </div>
         </div>
-        {/* Loading animation - text only */}
-        <div className="loading-animation" style={{ marginTop: '10px' }}>
-          <span className="progress-text">{message ?? 'Loading...'}</span>
+        <div className="loading-animation">
+          <span className="progress-text">{messageText}</span>
+          {hint ? <span className="loading-hint">{hint}</span> : null}
         </div>
       </div>
     </div>

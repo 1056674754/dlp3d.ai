@@ -68,6 +68,9 @@ export function createInjectedJavaScript(config: {
       window.addEventListener('nativeMessage', function(e) {
         var detail = e.detail;
         if (detail && detail.type) {
+          if (detail.type === 'assets:manifest' && detail.payload) {
+            window.__DLP3D_NATIVE_ASSETS__ = detail.payload;
+          }
           // Dispatch to web app's event system
           if (window.__DLP3D_onNativeMessage) {
             window.__DLP3D_onNativeMessage(detail);
@@ -77,6 +80,26 @@ export function createInjectedJavaScript(config: {
 
       // Notify RN that bridge is ready
       window.NativeAPI.notifyReady();
+
+      window.addEventListener('error', function(e) {
+        try {
+          var message = e && e.message ? e.message : 'Unknown JavaScript error';
+          window.NativeAPI.notifyError(message, 'JS_ERROR');
+        } catch (_) {}
+      });
+
+      window.addEventListener('unhandledrejection', function(e) {
+        try {
+          var reason = e && e.reason;
+          var message =
+            typeof reason === 'string'
+              ? reason
+              : reason && reason.message
+                ? reason.message
+                : 'Unhandled promise rejection';
+          window.NativeAPI.notifyError(message, 'UNHANDLED_REJECTION');
+        } catch (_) {}
+      });
 
       // WebGL context loss monitoring
       (function monitorWebGL() {

@@ -2,7 +2,11 @@
  * Bridge message types for RN ↔ WebView communication.
  */
 
+import type { NativeAssetManifest } from '@/services/nativeAssets';
+
 // ─── Shared types ───────────────────────────────────────────────
+
+export type { NativeAssetManifest };
 
 export interface UserInfo {
   username: string;
@@ -41,7 +45,13 @@ export type WebViewToNativeEvent =
   | { type: 'ready'; payload: Record<string, never> }
   | { type: 'screenshot'; payload: { dataUrl: string } }
   | { type: 'settings:open'; payload: { panel: string } }
-  | { type: 'chat:list:updated'; payload: { chats: CharacterConfig[] } };
+  | {
+      type: 'chat:list:updated';
+      payload: {
+        chats: CharacterConfig[];
+        selectedCharacterId?: string | null;
+      };
+    };
 
 // ─── Native → WebView ──────────────────────────────────────────
 
@@ -53,5 +63,8 @@ export type NativeToWebViewEvent =
   | { type: 'config:update'; payload: Record<string, unknown> }
   | { type: 'language:change'; payload: { lang: string } }
   | { type: 'theme:change'; payload: { theme: 'light' | 'dark' } }
+  | { type: 'webview:navigate'; payload: { path: string } }
   | { type: 'character:select'; payload: { characterId: string; modelIndex: number } }
-  | { type: 'scene:select'; payload: { sceneIndex: number } };
+  | { type: 'scene:select'; payload: { sceneIndex: number } }
+  | { type: 'chat:requestNew'; payload: { modelIndex?: number } }
+  | { type: 'assets:manifest'; payload: NativeAssetManifest };

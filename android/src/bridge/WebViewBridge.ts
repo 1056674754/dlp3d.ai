@@ -1,6 +1,5 @@
 import type { NativeToWebViewEvent, WebViewToNativeEvent } from './types';
 import type { WebView } from 'react-native-webview';
-import { Platform } from 'react-native';
 
 type EventHandler<T = unknown> = (payload: T) => void;
 
@@ -10,15 +9,25 @@ type EventHandler<T = unknown> = (payload: T) => void;
 class WebViewBridge {
   private ref: WebView | null = null;
   private listeners: Map<string, EventHandler[]> = new Map();
+  private pendingOutbound: NativeToWebViewEvent[] = [];
 
   setRef(ref: WebView | null) {
     this.ref = ref;
+    if (ref) {
+      this.flushPending();
+    }
   }
 
-  /**
-   * Send event from RN → WebView
-   */
-  send(event: NativeToWebViewEvent) {
+  private flushPending() {
+    while (this.ref && this.pendingOutbound.length > 0) {
+      const ev = this.pendingOutbound.shift();
+      if (ev) {
+        this.injectEvent(ev);
+      }
+    }
+  }
+
+  private injectEvent(event: NativeToWebViewEvent) {
     const js = `
       (function() {
         window.dispatchEvent(new CustomEvent('nativeMessage', {
@@ -28,6 +37,17 @@ class WebViewBridge {
       true;
     `;
     this.ref?.injectJavaScript(js);
+  }
+
+  /**
+   * Send event from RN → WebView
+   */
+  send(event: NativeToWebViewEvent) {
+    if (!this.ref) {
+      this.pendingOutbound.push(event);
+      return;
+    }
+    this.injectEvent(event);
   }
 
   /**

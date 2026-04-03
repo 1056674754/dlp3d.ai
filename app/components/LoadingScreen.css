@@ -67,6 +67,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  width: min(88vw, 520px);
 }
 
 .loading-title {
@@ -114,10 +115,12 @@
 }
 
 .loading-animation {
+  margin-top: 0.9rem;
   margin-bottom: 1.5rem;
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 0.55rem;
 }
 
 .progress-text {
@@ -140,6 +143,13 @@
   background-clip: text;
   color: transparent;
   animation: rainbow-move 3s linear infinite;
+}
+
+.loading-hint {
+  max-width: min(88vw, 520px);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.72);
 }
 
 @keyframes rainbow-move {
@@ -170,19 +180,49 @@
   .progress-text {
     font-size: 0.85rem;
   }
+  .loading-progress-label,
+  .loading-hint {
+    font-size: 0.8rem;
+  }
+  .loading-progress-bar {
+    height: 10px;
+  }
 }
+
+.loading-progress-shell {
+  width: min(88vw, 520px);
+}
+
+.loading-progress-shell.mobile {
+  width: min(88vw, 420px);
+}
+
+.loading-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-bottom: 0.7rem;
+}
+
+.loading-progress-label {
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.92);
+}
+
 .loading-progress-bar {
-  width: 200px;
-  height: 20px;
-  border-radius: 5px;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
   overflow: hidden;
-  background: #222;
-  transform: skewX(-20deg);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .loading-progress-fill {
   height: 100%;
-  width: 60%; /* 当前进度 */
+  min-width: 10px;
   background: linear-gradient(
     90deg,
     #ff6b6b,
@@ -193,13 +233,6 @@
   );
   background-size: 200% 100%;
   animation: rainbow-move 3s linear infinite;
-  clip-path: inherit;
-}
-@keyframes rainbow-move {
-  0% {
-    background-position: 0% 50%;
-  }
-  100% {
-    background-position: 200% 50%;
-  }
+  border-radius: inherit;
+  transition: width 360ms ease;
 }

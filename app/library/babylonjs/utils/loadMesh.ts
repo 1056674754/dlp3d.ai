@@ -1,4 +1,5 @@
 import * as BABYLON from '@babylonjs/core'
+import { getGroundRootUrl } from '@/utils/nativeAssets'
 
 /**
  * Load a ground model (GLB) and return its meshes, grouped under a parent mesh.
@@ -18,7 +19,7 @@ import * as BABYLON from '@babylonjs/core'
  */
 export function loadGroundMesh(
   scene: BABYLON.Scene,
-  rootUrl: string = '/models/ground/',
+  rootUrl: string = getGroundRootUrl(),
   filename: string = 'ground.glb',
   translation: BABYLON.Vector3 = new BABYLON.Vector3(0, 0, 0),
   rotationDegrees: BABYLON.Vector3 = new BABYLON.Vector3(0, 0, 0),
@@ -96,8 +97,8 @@ export interface GroundMeshConfig {
  * @returns The corresponding ground model filename, e.g. 'hdr-vast.glb'.
  */
 export function getGroundModelFilename(hdriFilename: string): string {
-  // Replace .jpg with .glb
-  return hdriFilename.replace('.jpg', '.glb')
+  if (hdriFilename.endsWith('.glb')) return hdriFilename
+  return hdriFilename.replace(/\.(jpg|jpeg|png)$/i, '.glb')
 }
 
 /**
@@ -162,7 +163,7 @@ export function loadGroundMeshWithPreset(
   const config = GROUND_MESH_PRESETS[preset]
   return loadGroundMesh(
     scene,
-    config.rootUrl,
+    getGroundRootUrl(),
     config.filename,
     config.translation,
     config.rotationDegrees,
@@ -197,7 +198,7 @@ export function loadGroundMeshForHDR(
   const groundFilename = getGroundModelFilename(hdriFilename)
   return loadGroundMesh(
     scene,
-    '/models/ground/',
+    getGroundRootUrl(),
     groundFilename,
     translation,
     rotationDegrees,

@@ -10,6 +10,23 @@ export function isNativeApp(): boolean {
 }
 
 /**
+ * 内嵌 RN WebView 时不展示 Web 顶栏（登录 / 语言等），由原生负责。
+ * - 静态导出预渲染（无 `window`）：用 `NEXT_PUBLIC_OFFLINE_WEBVIEW=1` 与 HTML 一致。
+ * - 运行时：仅用 `window.__DLP3D_EMBEDDED_IN_RN__`（layout 内联脚本或 RN 注入）或 `ReactNativeWebView`；
+ *   不再仅凭 `NEXT_PUBLIC_OFFLINE_WEBVIEW`，否则在普通浏览器打开 export 会误判，且易与 hydration 不一致。
+ */
+export function shouldHideWebAuthChrome(): boolean {
+  if (typeof window === 'undefined') {
+    return process.env.NEXT_PUBLIC_OFFLINE_WEBVIEW === '1'
+  }
+  const w = window as unknown as { __DLP3D_EMBEDDED_IN_RN__?: boolean }
+  if (w.__DLP3D_EMBEDDED_IN_RN__) {
+    return true
+  }
+  return isNativeApp()
+}
+
+/**
  * Check if the native API bridge is ready (injected by the RN layer).
  */
 export function isNativeReady(): boolean {

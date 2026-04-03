@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useState, useEffect, useCallback } from 'react'
+import type { TFunction } from 'i18next'
 import { HDRI_SCENES } from '@/library/babylonjs/config/scene'
 import Navigation from './components/layout/Navigation'
 
@@ -12,7 +13,11 @@ import BabylonViewer, { BabylonViewerRef } from './components/ui/BabylonViewer'
 import LoadingScreen from './components/LoadingScreen'
 import '@/styles/components.css'
 import { captureScreenshot, saveScreenshotToStorage } from '@/utils/screenshot'
-import { isNativeApp, patchWindowOpen } from '@/utils/nativeBridge'
+import {
+  isNativeApp,
+  patchWindowOpen,
+  shouldHideWebAuthChrome,
+} from '@/utils/nativeBridge'
 
 import ConfigSidebar from './components/sidebar'
 import LeftSidebar from './components/setting'
@@ -29,6 +34,7 @@ import {
   getIsSceneLoading,
   setIsSceneLoading,
   getLoadingProgress,
+  setLoadingProgress,
   getSelectedChat,
 } from '@/features/chat/chat'
 
@@ -39,10 +45,17 @@ import {
   getUserInfo,
 } from '@/features/auth/authStore'
 import { usePromptingSettings } from '@/hooks/usePromptingSettings'
+import { useNativeChatBridge } from '@/hooks/useNativeChatBridge'
+import { useNativeSettingsBridge } from '@/hooks/useNativeSettingsBridge'
 import { checkLocation, isSensetimeOrchestrator } from '@/utils/location'
 import { ConfirmDialog } from './components/common/Dialog'
 import { useTranslation } from 'react-i18next'
 import { fetchGetMissingSecret } from '@/request/api'
+import {
+  logStartupEvent,
+  STARTUP_EVENT_NAME,
+  type StartupEventPayload,
+} from '@/utils/startupProfiler'
 
 const link = {
   href: 'https://github.com/dlp3d-ai/dlp3d.ai',
@@ -50,6 +63,64 @@ const link = {
   title: 'GitHub',
   label: 'GitHub',
 }
+
+interface StartupLoadingStep {
+  progress: number
+  text: string
+}
+
+function getStartupLoadingStep(
+  stage: string,
+  t: TFunction,
+): StartupLoadingStep | null {
+  switch (stage) {
+    case 'home.component-mounted':
+    case 'babylon.viewer-mounted':
+      return { progress: 5, text: t('loading.bootingApp') }
+
+    case 'babylon.scene-change':
+      return {
+        progress: 10,
+        text: t('loading.initializeScene', { ns: 'client' }),
+      }
+
+    case 'babylon.scene.startup-ground-ready':
+    case 'babylon.scene.hdr:start':
+      return {
+        progress: 15,
+        text: t('loading.loadEnvironment', { ns: 'client' }),
+      }
+
+    case 'babylon.scene.hdr:end':
+    case 'babylon.scene.visual-ready':
+    case 'home.scene-visual-ready':
+      return {
+        progress: 20,
+        text: t('loading.loadEnvironment', { ns: 'client' }),
+      }
+
+    case 'babylon.character-load:start':
+      return {
+        progress: 25,
+        text: t('loading.loadCharacterModel', { ns: 'client' }),
+      }
+
+    case 'babylon.character-load:end':
+    case 'home.character-loaded':
+      return { progress: 92, text: t('loading.characterReady') }
+
+    case 'babylon.scene.ground:start':
+    case 'babylon.scene.ground:end':
+      return { progress: 95, text: t('loading.finalizingScene') }
+
+    case 'home.loading-overlay-hidden':
+      return { progress: 100, text: t('loading.systemReady', { ns: 'client' }) }
+
+    default:
+      return null
+  }
+}
+
 /**
  * Home component.
  *
@@ -74,6 +145,8 @@ export default function Home() {
   const loadingProgress = useSelector(getLoadingProgress)
 
   const [sceneName, setSceneName] = useState(HDRI_SCENES[3].name)
+  const initialSceneNameRef = useRef(sceneName)
+  const initialModelIndexRef = useRef(selectedModelIndex)
   const isSensetimeTAServer = isSensetimeOrchestrator()
 
   const [chatAvailable, setChatAvailable] = useState(false) // Whether Chat should be enabled for current character
@@ -87,7 +160,23 @@ export default function Home() {
   const [currentTtsType, setCurrentTtsType] = useState<string | null>(null)
   const [showUnsupportedTtsNotice, setShowUnsupportedTtsNotice] = useState(false)
   const { isMobile } = useDevice()
-  const { loadUserCharacters } = usePromptingSettings()
+  const [loadingHint, setLoadingHint] = useState('')
+  const loadingProgressRef = useRef(0)
+  const {
+    loadUserCharacters,
+    characters,
+    selectCharacter,
+    deleteCharacter,
+    createChatFromTemplate,
+    refreshSelectedCharacter,
+  } = usePromptingSettings()
+  useNativeChatBridge({
+    characters,
+    selectCharacter,
+    deleteCharacter,
+    createChatFromTemplate,
+  })
+  useNativeSettingsBridge(refreshSelectedCharacter)
   const [selectedScene, setSelectedScene] = useState(3) // Parameter for scene navigation
   const [locationDialogOpen, setLocationDialogOpen] = useState(false)
   const [missingSecretDialogOpen, setMissingSecretDialogOpen] = useState(false)
@@ -102,8 +191,119 @@ export default function Home() {
   })
 
   useEffect(() => {
+    logStartupEvent('home.component-mounted', {
+      initialSceneName: initialSceneNameRef.current,
+      initialModelIndex: initialModelIndexRef.current,
+    })
+  }, [])
+
+  const applyLoadingState = useCallback(
+    (nextProgress: number, nextText: string, nextHint?: string) => {
+      const normalizedProgress = Math.min(
+        100,
+        Math.max(loadingProgressRef.current, Math.round(nextProgress)),
+      )
+
+      loadingProgressRef.current = normalizedProgress
+      dispatch(setLoadingProgress(normalizedProgress))
+      dispatch(setLoadingText(nextText))
+
+      if (typeof nextHint === 'string') {
+        setLoadingHint(nextHint)
+      }
+    },
+    [dispatch],
+  )
+
+  const beginLoadingCycle = useCallback(
+    (nextProgress: number, nextText: string, nextHint?: string) => {
+      const normalizedProgress = Math.max(0, Math.min(100, Math.round(nextProgress)))
+
+      loadingProgressRef.current = normalizedProgress
+      dispatch(setLoadingProgress(normalizedProgress))
+      dispatch(setLoadingText(nextText))
+
+      if (typeof nextHint === 'string') {
+        setLoadingHint(nextHint)
+      }
+    },
+    [dispatch],
+  )
+
+  useEffect(() => {
+    if (loadingProgressRef.current === 0) {
+      beginLoadingCycle(6, t('loading.bootingApp'), t('loading.firstLaunchHint'))
+      return
+    }
+
+    if (isGlobalLoading) {
+      setLoadingHint(t('loading.firstLaunchHint'))
+    }
+  }, [beginLoadingCycle, isGlobalLoading, t])
+
+  useEffect(() => {
+    const handleStartupEvent = (event: Event) => {
+      const { detail } = event as CustomEvent<StartupEventPayload>
+      const step = getStartupLoadingStep(detail.stage, t)
+
+      if (!step) {
+        return
+      }
+
+      applyLoadingState(
+        step.progress,
+        step.text,
+        detail.stage === 'home.loading-overlay-hidden'
+          ? t('loading.readyHint')
+          : t('loading.firstLaunchHint'),
+      )
+    }
+
+    window.addEventListener(STARTUP_EVENT_NAME, handleStartupEvent as EventListener)
+
+    return () => {
+      window.removeEventListener(
+        STARTUP_EVENT_NAME,
+        handleStartupEvent as EventListener,
+      )
+    }
+  }, [applyLoadingState, t])
+
+  useEffect(() => {
+    if (!isCharacterLoading) return
+
+    const TRICKLE_START = 28
+    const TRICKLE_END = 88
+    const TRICKLE_INTERVAL_MS = 800
+
+    const id = setInterval(() => {
+      const cur = loadingProgressRef.current
+      if (cur < TRICKLE_START || cur >= TRICKLE_END) return
+
+      const remaining = TRICKLE_END - cur
+      const step = Math.max(1, Math.round(remaining * 0.08))
+      applyLoadingState(
+        cur + step,
+        t('loading.loadCharacterModel', { ns: 'client' }),
+      )
+    }, TRICKLE_INTERVAL_MS)
+
+    return () => clearInterval(id)
+  }, [applyLoadingState, isCharacterLoading, t])
+
+  useEffect(() => {
     setIsGlobalLoading(isLoading || isSceneLoading || isCharacterLoading)
   }, [isLoading, isSceneLoading, isCharacterLoading])
+
+  useEffect(() => {
+    if (!isGlobalLoading) {
+      logStartupEvent('home.loading-overlay-hidden', {
+        isLoading,
+        isSceneLoading,
+        isCharacterLoading,
+      })
+    }
+  }, [isGlobalLoading, isLoading, isSceneLoading, isCharacterLoading])
 
   useEffect(() => {
     ;(window as any).babylonViewerRef = babylonViewerRef
@@ -124,6 +324,7 @@ export default function Home() {
     const timer = setTimeout(() => {
       setIsLoading(false)
       dispatch(setIsCharacterLoading(false))
+      logStartupEvent('home.minimum-loading-timer-finished')
     }, 3000)
 
     return () => clearTimeout(timer)
@@ -151,12 +352,17 @@ export default function Home() {
         )
         if (index !== -1) {
           dispatch(setIsSceneLoading(true))
+          beginLoadingCycle(
+            20,
+            t('loading.initializeScene', { ns: 'client' }),
+            t('loading.firstLaunchHint'),
+          )
           setSceneName(HDRI_SCENES[index].name)
           setSelectedScene(index)
         }
       }
     }
-  }, [selectedChat])
+  }, [beginLoadingCycle, dispatch, sceneName, selectedChat, t])
 
   /**
    * Handle character loaded event.
@@ -167,15 +373,15 @@ export default function Home() {
    * @returns void
    */
   const handleCharacterLoaded = useCallback(() => {
+    logStartupEvent('home.character-loaded')
     dispatch(setIsCharacterLoading(false))
-    dispatch(setLoadingText(''))
     // Delay event trigger to ensure all components are initialized
     setTimeout(() => {
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('character-loaded'))
       }
     }, 1000)
-  }, [])
+  }, [dispatch])
 
   /**
    * Handle scene change.
@@ -186,7 +392,11 @@ export default function Home() {
    */
   const handleSceneChange = (scene: string) => {
     dispatch(setIsSceneLoading(true))
-    dispatch(setLoadingText('Loading Scene...'))
+    beginLoadingCycle(
+      20,
+      t('loading.initializeScene', { ns: 'client' }),
+      t('loading.firstLaunchHint'),
+    )
 
     setSceneName(scene)
     const index = HDRI_SCENES.findIndex((scene: any) => scene.name === scene)
@@ -201,9 +411,9 @@ export default function Home() {
    * @returns void
    */
   const handleSceneLoaded = useCallback(() => {
+    logStartupEvent('home.scene-visual-ready')
     dispatch(setIsSceneLoading(false))
-    dispatch(setLoadingText(''))
-  }, [])
+  }, [dispatch])
 
   /**
    * Handle starting a conversation.
@@ -368,7 +578,9 @@ export default function Home() {
    * @returns JSX.Element | null The button or null when hidden on mobile during startup.
    */
   const ChatButton = useCallback(() => {
-    if (isChatStarting || (isMobile && isLogin) || isNativeApp()) return null
+    if (isChatStarting || (isMobile && isLogin) || shouldHideWebAuthChrome()) {
+      return null
+    }
     return (
       <div className="button-group-container">
         <button
@@ -479,7 +691,8 @@ export default function Home() {
       {/* Loading Screen */}
       <LoadingScreen
         isLoading={isGlobalLoading}
-        message={t('loading.message')}
+        message={loadingText || t('loading.message')}
+        hint={loadingHint}
         onComplete={() => setIsLoading(false)}
         progress={loadingProgress}
       />
@@ -599,7 +812,7 @@ export default function Home() {
         }}
       />
       {/* Footer */}
-      {!isChatStarting && !isLogin && (
+      {!isChatStarting && !isLogin && !shouldHideWebAuthChrome() && (
         <footer className={uiFadeOut ? 'fade-out' : ''}>
           <Footer />
         </footer>
