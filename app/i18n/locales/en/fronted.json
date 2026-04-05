@@ -17,8 +17,8 @@
     "message": "Loading...",
     "initializingScene": "Initializing Scene...",
     "bootingApp": "Starting your digital life...",
-    "characterReady": "Character loaded, lighting up the scene...",
-    "finalizingScene": "Applying final scene preparation...",
+    "characterReady": "Loading scene and character assets...",
+    "finalizingScene": "Almost ready...",
     "firstLaunchHint": "The first launch can take longer while models and scene assets are prepared. Please keep this page open.",
     "readyHint": "Almost there. Your character is about to appear."
   },

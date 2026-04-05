@@ -37,6 +37,14 @@ docs/_static/audio2face
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+# Android WebView 调试用截图（勿提交）
+/android-webview-*.png
+
+# Android 内嵌 Web：Next 构建产物（chunk/CSS/manifest，每次 build 哈希会变）
+android/android/app/src/main/assets/web/next-static/
+# Next 导出到 web 根目录的入口页与 RSC payload（与 next-static 同步生成；仅匹配根目录，不含子目录 README 等）
+android/android/app/src/main/assets/web/*.html
+android/android/app/src/main/assets/web/*.txt
 
 # local env files
 .env*.local
@@ -66,4 +74,5 @@ data/
 
 # weights
 weights/
+
 

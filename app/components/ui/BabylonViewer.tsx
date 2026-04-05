@@ -45,6 +45,7 @@ import { LoadingProgressManager } from '../../utils/progressManager'
 import { HDRI_SCENES } from '@/library/babylonjs/config/scene'
 import { getCharacterModelUrl, resolveHdriUrl } from '@/utils/nativeAssets'
 import { createStartupSpan, logStartupEvent } from '@/utils/startupProfiler'
+import { tryLoadCachedCharacter, cacheCharacterResult } from '@/utils/characterCache'
 
 function waitForNextFrames(frameCount: number): Promise<void> {
   let remaining = Math.max(1, frameCount)
@@ -410,15 +411,22 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
           }
 
           const modelUrl = getCharacterModelUrl(characterIndex)
-          const slash = modelUrl.lastIndexOf('/')
-          const rootUrl = modelUrl.slice(0, slash + 1)
-          const meshFile = modelUrl.slice(slash + 1)
-          const result = await SceneLoader.ImportMeshAsync(
-            '',
-            rootUrl,
-            meshFile,
-            sceneRef.current,
-          )
+          const cacheKey = `char_${characterIndex}_${modelUrl.split('/').pop()}`
+
+          let result = await tryLoadCachedCharacter(cacheKey, sceneRef.current!)
+
+          if (!result) {
+            const slash = modelUrl.lastIndexOf('/')
+            const rootUrl = modelUrl.slice(0, slash + 1)
+            const meshFile = modelUrl.slice(slash + 1)
+            result = await SceneLoader.ImportMeshAsync(
+              '',
+              rootUrl,
+              meshFile,
+              sceneRef.current,
+            )
+            void cacheCharacterResult(cacheKey, result, modelUrl)
+          }
 
           // Stale check: if a newer load started, discard this result
           if (myVersion !== loadVersionRef.current) {
@@ -1052,17 +1060,11 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
         // Load corresponding ground model and split visual-ready from full-ready.
         const run = async () => {
           let didNotifyVisualReady = false
-          const finishHdrLoad = createStartupSpan('babylon.scene.hdr', {
-            sceneName,
-            textureSize: hdrTextureSize,
-          })
-          const finishGroundLoad = createStartupSpan('babylon.scene.ground', {
-            sceneName,
-            deferred: true,
-          })
-          const finishWhenReady = createStartupSpan('babylon.scene.when-ready', {
-            sceneName,
-          })
+          type SpanFinish = (extra?: Record<string, unknown>) => void
+          const noop: SpanFinish = () => {}
+          let finishHdrLoad: SpanFinish = noop
+          let finishGroundLoad: SpanFinish = noop
+
           const notifyVisualReady = (phase: 'startup-ground' | 'hdr') => {
             if (didNotifyVisualReady || canceled) {
               return
@@ -1073,7 +1075,6 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
               homepageDefaultScene: isHomepageDefaultScene,
               phase,
             })
-            onSceneLoaded?.()
           }
 
           try {
@@ -1086,12 +1087,19 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
               notifyVisualReady('startup-ground')
             }
 
+            finishHdrLoad = createStartupSpan('babylon.scene.hdr', {
+              sceneName,
+              textureSize: hdrTextureSize,
+            })
             await waitForTextureReady(newHdrTexture)
             finishHdrLoad()
 
             const groundModel = sceneConfig.groundModel
             const groundPromise = groundModel
               ? (async () => {
+                  finishGroundLoad = createStartupSpan('babylon.scene.ground', {
+                    sceneName,
+                  })
                   try {
                     const meshes = await loadGroundMeshForHDR(
                       sceneRef.current!,
@@ -1133,9 +1141,8 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
             void (async () => {
               try {
                 await sceneRef.current!.whenReadyAsync()
-                finishWhenReady()
               } catch (_) {
-                finishWhenReady({ failed: true })
+                // whenReadyAsync failure is non-critical
               }
             })()
 
@@ -1145,17 +1152,19 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
             }
 
             await groundPromise
+
+            if (!canceled) {
+              logStartupEvent('babylon.scene.fully-ready', {
+                sceneName,
+                homepageDefaultScene: isHomepageDefaultScene,
+              })
+              onSceneLoaded?.()
+            }
           } catch (error) {
-            finishHdrLoad({
-              failed: true,
-            })
-            finishGroundLoad({
-              skipped: true,
-            })
-            finishWhenReady({
-              skipped: true,
-            })
+            finishHdrLoad({ failed: true })
+            finishGroundLoad({ skipped: true })
             console.warn(`Failed to prepare scene ${sceneName}:`, error)
+            onSceneLoaded?.()
           }
         }
 

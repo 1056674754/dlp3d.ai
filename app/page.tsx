@@ -69,22 +69,51 @@ interface StartupLoadingStep {
   text: string
 }
 
+/**
+ * Map startup event stages to loading progress.
+ *
+ * Character loading and scene/HDR/ground loading run IN PARALLEL.
+ * Progress values are absolute "at-least" marks; applyLoadingState
+ * uses Math.max so they never regress regardless of arrival order.
+ * The trickle effect fills visual gaps during long async waits.
+ */
 function getStartupLoadingStep(
   stage: string,
   t: TFunction,
 ): StartupLoadingStep | null {
   switch (stage) {
+    // --- Boot ---
     case 'home.component-mounted':
     case 'babylon.viewer-mounted':
       return { progress: 5, text: t('loading.bootingApp') }
 
     case 'babylon.scene-change':
       return {
-        progress: 10,
+        progress: 8,
         text: t('loading.initializeScene', { ns: 'client' }),
       }
 
+    // --- Parallel: character track (typically fast with cache) ---
+    case 'babylon.character-load:start':
+      return {
+        progress: 10,
+        text: t('loading.loadEnvironment', { ns: 'client' }),
+      }
+
+    case 'babylon.character-load:end':
+    case 'home.character-loaded':
+      return {
+        progress: 25,
+        text: t('loading.loadEnvironment', { ns: 'client' }),
+      }
+
+    // --- Parallel: scene track (HDR + ground — the real bottleneck) ---
     case 'babylon.scene.startup-ground-ready':
+      return {
+        progress: 12,
+        text: t('loading.loadEnvironment', { ns: 'client' }),
+      }
+
     case 'babylon.scene.hdr:start':
       return {
         progress: 15,
@@ -92,29 +121,36 @@ function getStartupLoadingStep(
       }
 
     case 'babylon.scene.hdr:end':
-    case 'babylon.scene.visual-ready':
-    case 'home.scene-visual-ready':
       return {
-        progress: 20,
+        progress: 55,
         text: t('loading.loadEnvironment', { ns: 'client' }),
       }
 
-    case 'babylon.character-load:start':
+    case 'babylon.scene.ground:start':
       return {
-        progress: 25,
-        text: t('loading.loadCharacterModel', { ns: 'client' }),
+        progress: 60,
+        text: t('loading.finalizingScene'),
       }
 
-    case 'babylon.character-load:end':
-    case 'home.character-loaded':
-      return { progress: 92, text: t('loading.characterReady') }
-
-    case 'babylon.scene.ground:start':
     case 'babylon.scene.ground:end':
+      return { progress: 88, text: t('loading.finalizingScene') }
+
+    case 'babylon.scene.visual-ready':
+      return {
+        progress: 14,
+        text: t('loading.loadEnvironment', { ns: 'client' }),
+      }
+
+    // --- Both tracks done ---
+    case 'babylon.scene.fully-ready':
+    case 'home.scene-fully-ready':
       return { progress: 95, text: t('loading.finalizingScene') }
 
     case 'home.loading-overlay-hidden':
-      return { progress: 100, text: t('loading.systemReady', { ns: 'client' }) }
+      return {
+        progress: 100,
+        text: t('loading.systemReady', { ns: 'client' }),
+      }
 
     default:
       return null
@@ -191,6 +227,8 @@ export default function Home() {
   })
 
   useEffect(() => {
+    dispatch(setIsSceneLoading(true))
+    dispatch(setIsCharacterLoading(true))
     logStartupEvent('home.component-mounted', {
       initialSceneName: initialSceneNameRef.current,
       initialModelIndex: initialModelIndexRef.current,
@@ -270,30 +308,28 @@ export default function Home() {
   }, [applyLoadingState, t])
 
   useEffect(() => {
-    if (!isCharacterLoading) return
+    if (!isGlobalLoading) return
 
-    const TRICKLE_START = 28
+    const TRICKLE_START = 15
     const TRICKLE_END = 88
-    const TRICKLE_INTERVAL_MS = 800
+    const TRICKLE_INTERVAL_MS = 600
 
     const id = setInterval(() => {
       const cur = loadingProgressRef.current
       if (cur < TRICKLE_START || cur >= TRICKLE_END) return
 
       const remaining = TRICKLE_END - cur
-      const step = Math.max(1, Math.round(remaining * 0.08))
-      applyLoadingState(
-        cur + step,
-        t('loading.loadCharacterModel', { ns: 'client' }),
-      )
+      const step = Math.max(1, Math.round(remaining * 0.06))
+      const text = t('loading.loadEnvironment', { ns: 'client' })
+      applyLoadingState(cur + step, text)
     }, TRICKLE_INTERVAL_MS)
 
     return () => clearInterval(id)
-  }, [applyLoadingState, isCharacterLoading, t])
+  }, [applyLoadingState, isGlobalLoading, t])
 
   useEffect(() => {
-    setIsGlobalLoading(isLoading || isSceneLoading || isCharacterLoading)
-  }, [isLoading, isSceneLoading, isCharacterLoading])
+    setIsGlobalLoading(isSceneLoading || isCharacterLoading)
+  }, [isSceneLoading, isCharacterLoading])
 
   useEffect(() => {
     if (!isGlobalLoading) {
@@ -319,16 +355,6 @@ export default function Home() {
       setChatAvailable(true)
     }
   }, [isLogin])
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsLoading(false)
-      dispatch(setIsCharacterLoading(false))
-      logStartupEvent('home.minimum-loading-timer-finished')
-    }, 3000)
-
-    return () => clearTimeout(timer)
-  }, [])
 
   useEffect(() => {
     dispatch(setAuthState(loadAuthStateFromStorage()))
@@ -411,7 +437,7 @@ export default function Home() {
    * @returns void
    */
   const handleSceneLoaded = useCallback(() => {
-    logStartupEvent('home.scene-visual-ready')
+    logStartupEvent('home.scene-fully-ready')
     dispatch(setIsSceneLoading(false))
   }, [dispatch])
 
