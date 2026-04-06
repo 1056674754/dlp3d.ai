@@ -113,20 +113,33 @@ services:
       start_period: 20s
 
   web_frontend:
-    image:  dlp3d/web:latest
+    image: dlp3d/web:latest
     container_name: web_frontend
     restart: unless-stopped
     environment:
       NEXT_APP_NAME: "dlp3d"
-      NEXT_PUBLIC_BACKEND_HOST: "127.0.0.1"
-      NEXT_PUBLIC_BACKEND_PORT: 18001
-      NEXT_PUBLIC_ORCHESTRATOR_HOST: "127.0.0.1"
-      NEXT_PUBLIC_ORCHESTRATOR_PORT: 18002
+      NEXT_PUBLIC_BACKEND_HOST: "__SAME_ORIGIN__"
+      NEXT_PUBLIC_BACKEND_PORT: ""
+      NEXT_PUBLIC_ORCHESTRATOR_HOST: "__SAME_ORIGIN__"
+      NEXT_PUBLIC_ORCHESTRATOR_PORT: ""
+      LEGACY_BACKEND_URL: "http://web_backend:18080/api/v1"
+      MONGODB_URI: "mongodb://web_user:web_password@mongodb:27017/web_database?authSource=web_database"
+      MONGODB_DB: "web_database"
+    volumes:
+      - ./public/characters:/app/public/characters:ro
+      - ./public/models:/app/public/models:ro
+      - ./public/scripts:/app/public/scripts:ro
+      - ./public/img/hdr:/app/public/img/hdr:ro
+      - ./public/img/model:/app/public/img/model:ro
     networks:
       - dlp3d_network
     depends_on:
-      - web_backend
-      - orchestrator
+      mongodb:
+        condition: service_healthy
+      web_backend:
+        condition: service_healthy
+      orchestrator:
+        condition: service_healthy
 
   nginx:
     image: dlp3d/web_proxy:latest

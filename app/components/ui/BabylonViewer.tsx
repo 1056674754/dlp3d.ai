@@ -29,6 +29,7 @@ import {
   ShadowGenerator,
   TransformNode,
   AnimationGroup,
+  Quaternion,
 } from '@babylonjs/core'
 import { GLTFFileLoader } from '@babylonjs/loaders'
 import '@babylonjs/loaders/glTF'
@@ -171,6 +172,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
     const characterRootRef = useRef<TransformNode | null>(null)
     const lastAnimationGroupsRef = useRef<AnimationGroup[] | null>(null)
     const loadVersionRef = useRef<number>(0)
+    const eyeTrackingCleanupRef = useRef<(() => void) | null>(null)
 
     /**
      * Expose camera rotation methods and other utilities to parent components.
@@ -483,40 +485,131 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
             // Enable animation playback for GLB files with embedded animations
             if (result.animationGroups.length > 0) {
               const animationGroup = result.animationGroups[0]
-              // Store the original end frame before modifying the animation group
               const originalEndFrame = animationGroup.to
-              // Middle frame is the frame number of last int in file name
               const middleFrame = parseInt(
                 character_index_file_name_mapping[characterIndex].split('_')[1],
               )
-              // First play the entrance animation (first half frames) once
-              animationGroup.play(false) // Play without loop
+              animationGroup.play(false)
               animationGroup.setWeightForAllAnimatables(1.0)
-
-              // Set the frame range for entrance animation
               animationGroup.to = middleFrame
 
-              // Listen for the entrance animation to end
               const onEntranceAnimationEnd = () => {
-                // Clean up the event listener
                 animationGroup.onAnimationGroupEndObservable.removeCallback(
                   onEntranceAnimationEnd,
                 )
-
-                // Now play the loop animation (second half frames) continuously
                 animationGroup.from = middleFrame
-                // Special case for character4_367.glb: loop from 367 to 391 instead of to the end
                 const loopEndFrame = characterIndex === 3 ? 391 : originalEndFrame
                 animationGroup.to = loopEndFrame
-                animationGroup.play(true) // Play with loop
+                animationGroup.play(true)
+
+                // Idle variation: randomize playback speed slightly every few seconds
+                let nextSpeedChange = 3000 + Math.random() * 5000
+                let speedTimer = 0
+                sceneRef.current!.registerBeforeRender(() => {
+                  speedTimer += sceneRef.current!.getEngine().getDeltaTime()
+                  if (speedTimer >= nextSpeedChange) {
+                    speedTimer = 0
+                    nextSpeedChange = 3000 + Math.random() * 5000
+                    const newSpeed = 0.85 + Math.random() * 0.3 // 0.85 ~ 1.15
+                    animationGroup.speedRatio = newSpeed
+                  }
+                })
               }
 
-              // Add event listener for entrance animation end
               animationGroup.onAnimationGroupEndObservable.add(
                 onEntranceAnimationEnd,
               )
-              // remember for future cleanup
               lastAnimationGroupsRef.current = result.animationGroups
+            }
+
+            // Eye tracking: character eyes follow user via device orientation,
+            // mouse position, or native camera face detection
+            if (eyeTrackingCleanupRef.current) {
+              eyeTrackingCleanupRef.current()
+              eyeTrackingCleanupRef.current = null
+            }
+            const leftEye = sceneRef.current!.getTransformNodeByName('Eye_L')
+            const rightEye = sceneRef.current!.getTransformNodeByName('Eye_R')
+
+            if (leftEye?.rotationQuaternion && rightEye?.rotationQuaternion) {
+              const MAX_H = 12
+              const MAX_V = 5
+              const SMOOTH = 0.08
+              let gazeTargetH = 0
+              let gazeTargetV = 0
+              let gazeSmoothH = 0
+              let gazeSmoothV = 0
+              let eyeTrackingDisposed = false
+
+              const leftEyeBaseRot = leftEye.rotationQuaternion.clone()
+              const rightEyeBaseRot = rightEye.rotationQuaternion.clone()
+
+              const onDeviceOrientation = (e: DeviceOrientationEvent) => {
+                if (eyeTrackingDisposed) return
+                if (e.gamma != null) {
+                  gazeTargetH = Math.max(-MAX_H, Math.min(MAX_H, -e.gamma * 0.4))
+                }
+                if (e.beta != null) {
+                  gazeTargetV = Math.max(
+                    -MAX_V,
+                    Math.min(MAX_V, -(e.beta - 70) * 0.15),
+                  )
+                }
+              }
+
+              const onMouseMove = (e: MouseEvent) => {
+                if (eyeTrackingDisposed || e.buttons !== 0) return
+                const nx = (e.clientX / window.innerWidth - 0.5) * 2
+                const ny = (e.clientY / window.innerHeight - 0.5) * 2
+                gazeTargetH = nx * MAX_H
+                gazeTargetV = ny * MAX_V * 0.5
+              }
+
+              const onFacePosition = (e: Event) => {
+                if (eyeTrackingDisposed) return
+                const { x, y } = (e as CustomEvent).detail
+                gazeTargetH = (x as number) * MAX_H
+                gazeTargetV = (y as number) * MAX_V
+              }
+
+              window.addEventListener('deviceorientation', onDeviceOrientation)
+              window.addEventListener('mousemove', onMouseMove)
+              window.addEventListener('dlp3d:face-position', onFacePosition)
+
+              const observer = sceneRef.current!.onBeforeRenderObservable.add(() => {
+                if (
+                  eyeTrackingDisposed ||
+                  !leftEye.rotationQuaternion ||
+                  !rightEye.rotationQuaternion
+                ) {
+                  return
+                }
+
+                gazeSmoothH += (gazeTargetH - gazeSmoothH) * SMOOTH
+                gazeSmoothV += (gazeTargetV - gazeSmoothV) * SMOOTH
+
+                if (Math.abs(gazeSmoothH) < 0.05 && Math.abs(gazeSmoothV) < 0.05) {
+                  leftEye.rotationQuaternion.copyFrom(leftEyeBaseRot)
+                  rightEye.rotationQuaternion.copyFrom(rightEyeBaseRot)
+                  return
+                }
+
+                const gazeRot = Quaternion.RotationYawPitchRoll(
+                  Tools.ToRadians(gazeSmoothH),
+                  Tools.ToRadians(gazeSmoothV),
+                  0,
+                )
+                leftEye.rotationQuaternion = leftEyeBaseRot.multiply(gazeRot)
+                rightEye.rotationQuaternion = rightEyeBaseRot.multiply(gazeRot)
+              })
+
+              eyeTrackingCleanupRef.current = () => {
+                eyeTrackingDisposed = true
+                window.removeEventListener('deviceorientation', onDeviceOrientation)
+                window.removeEventListener('mousemove', onMouseMove)
+                window.removeEventListener('dlp3d:face-position', onFacePosition)
+                sceneRef.current?.onBeforeRenderObservable.remove(observer)
+              }
             }
 
             // Set all loaded meshes to cast shadows
@@ -765,9 +858,11 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
         camera.maxZ = 999
         camera.minZ = 0
         camera.wheelPrecision = 200 // Higher value = smaller zoom steps
-        camera.lowerRadiusLimit = 0.8 // Minimum distance - prevent getting too close
-        camera.upperRadiusLimit = 5.0 // Maximum distance - prevent getting too far
-        camera.useBouncingBehavior = false // Disable bouncing - camera will stop at limits
+        camera.pinchPrecision = 150 // Match wheel precision for mobile pinch zoom
+        camera.pinchDeltaPercentage = 0.005 // Proportional zoom: 0.5% per pixel delta
+        camera.lowerRadiusLimit = 0.8
+        camera.upperRadiusLimit = 5.0
+        camera.useBouncingBehavior = false
         // Lock vertical rotation to current angle - only allow horizontal rotation
         camera.upperBetaLimit = Tools.ToRadians(85)
         camera.lowerBetaLimit = Tools.ToRadians(85)
@@ -778,11 +873,18 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
         camera.keysLeft.push(65) // A key
         camera.keysRight.push(68) // D key
 
-        // Ensure camera controls are properly initialized
-        camera.inertia = 0.9
+        camera.inertia = 0.85
         camera.angularSensibilityX = 1000
         camera.angularSensibilityY = 1000
         cameraRef.current = camera
+
+        // Idle auto-rotation: slow turntable, pauses when user interacts
+        camera.useAutoRotationBehavior = true
+        const autoRotation = camera.autoRotationBehavior!
+        autoRotation.idleRotationSpeed = 0.02
+        autoRotation.idleRotationSpinupTime = 5000
+        autoRotation.idleRotationWaitTime = 60000 // 1 minute idle before auto-rotate starts
+        autoRotation.zoomStopsAnimation = false
 
         // Replace lighting with dual hemispheric lights matching babylon page
         // Primary light

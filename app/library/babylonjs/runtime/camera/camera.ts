@@ -35,16 +35,16 @@ export class RoamingCamera extends BABYLON.ArcRotateCamera {
     this.panningSensibility = 2000
     this.maxZ = 999
     this.minZ = 0
-    this.wheelPrecision = 200 // Higher value = smaller zoom steps
-    // prevent camera from infinite zoom in/out
+    this.wheelPrecision = 200
+    this.pinchPrecision = 150
+    this.pinchDeltaPercentage = 0.005
     // see https://doc.babylonjs.com/features/featuresDeepDive/behaviors/cameraBehaviors
-    this.lowerRadiusLimit = 0.8 // Minimum distance - prevent getting too close
-    this.upperRadiusLimit = 5.0 // Maximum distance - prevent getting too far
-    this.useBouncingBehavior = false // Disable bouncing - camera will stop at limits
-    // Lock vertical rotation to current angle - only allow horizontal rotation
+    this.lowerRadiusLimit = 0.8
+    this.upperRadiusLimit = 5.0
+    this.useBouncingBehavior = false
     this.upperBetaLimit = BABYLON.Tools.ToRadians(85)
     this.lowerBetaLimit = BABYLON.Tools.ToRadians(85)
-    this.inertia = 0.9
+    this.inertia = 0.85
     this.angularSensibilityX = 1000
     this.angularSensibilityY = 1000
     // enable keyboard control of camera

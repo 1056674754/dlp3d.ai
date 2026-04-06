@@ -75,4 +75,15 @@ data/
 # weights
 weights/
 
+# drizzle migration journal (generated)
+drizzle/meta/
 
+# pnpm
+pnpm-lock.yaml
+
+# Large public assets (synced separately via deploy.sh --assets)
+public/characters/
+public/models/
+public/scripts/
+public/img/hdr/
+public/img/model/

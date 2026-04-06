@@ -47,20 +47,43 @@ export class ConfigSync {
     this._updateFromEnv()
   }
 
+  private _isSameOrigin(envHost: string): boolean {
+    return !envHost || envHost === '__SAME_ORIGIN__'
+  }
+
+  private _resolveHost(envHost: string): string {
+    if (this._isSameOrigin(envHost)) {
+      return typeof window !== 'undefined' ? window.location.hostname : ''
+    }
+    return envHost
+  }
+
+  private _resolvePort(envHost: string, envPort: string): number {
+    if (this._isSameOrigin(envHost)) {
+      if (typeof window !== 'undefined' && window.location.port) {
+        return parseInt(window.location.port, 10)
+      }
+      return window?.location?.protocol === 'http:' ? 80 : 443
+    }
+    return parseInt(envPort || '443', 10)
+  }
+
   private _updateFromEnv(): void {
-    this._config.orchestratorHost = getEnv('NEXT_PUBLIC_ORCHESTRATOR_HOST')
-    this._config.orchestratorPort = parseInt(
-      getEnv('NEXT_PUBLIC_ORCHESTRATOR_PORT') || '443',
-      10,
+    const orchHost = getEnv('NEXT_PUBLIC_ORCHESTRATOR_HOST')
+    this._config.orchestratorHost = this._resolveHost(orchHost)
+    this._config.orchestratorPort = this._resolvePort(
+      orchHost,
+      getEnv('NEXT_PUBLIC_ORCHESTRATOR_PORT'),
     )
     this._config.orchestratorPathPrefix = getEnv(
       'NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX',
     )
     this._config.orchestratorTimeout = getEnv('NEXT_PUBLIC_ORCHESTRATOR_TIMEOUT')
-    this._config.motionFileHost = getEnv('NEXT_PUBLIC_BACKEND_HOST')
-    this._config.motionFilePort = parseInt(
-      getEnv('NEXT_PUBLIC_BACKEND_PORT') || '443',
-      10,
+    const backendHost = getEnv('NEXT_PUBLIC_BACKEND_HOST')
+    this._config.motionFileHost = this._resolveHost(backendHost)
+    this._config.motionFilePort = this._resolvePort(
+      backendHost,
+      getEnv('NEXT_PUBLIC_BACKEND_PORT'),
     )
     this._config.motionFilePathPrefix = getEnv('NEXT_PUBLIC_BACKEND_PATH_PREFIX')
     this._config.motionFileTimeout = parseInt(

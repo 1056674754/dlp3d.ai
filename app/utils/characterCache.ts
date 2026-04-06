@@ -30,7 +30,7 @@ import { logStartupEvent, createStartupSpan } from '@/utils/startupProfiler'
 const DB_NAME = 'dlp3d-character-cache'
 const DB_VERSION = 1
 const STORE_NAME = 'characters'
-const FORMAT_VERSION = 2
+const FORMAT_VERSION = 5
 
 const VERTEX_KINDS = [
   VertexBuffer.PositionKind,
@@ -101,6 +101,7 @@ interface CachedBone {
   parentIndex: number
   matrix: number[]
   rest: number[]
+  base: number[]
   length: number
 }
 
@@ -288,26 +289,14 @@ function extractGLBMaterials(gltf: Record<string, unknown>): CachedGltfMaterial[
   )
 }
 
-function buildMeshMaterialMap(gltf: Record<string, unknown>): Map<string, number> {
-  const nodes = (gltf.nodes ?? []) as { name?: string; mesh?: number }[]
-  const meshes = (gltf.meshes ?? []) as {
-    primitives: { material?: number }[]
-  }[]
+function buildMaterialNameToIndexMap(
+  gltf: Record<string, unknown>,
+): Map<string, number> {
+  const materials = (gltf.materials ?? []) as { name?: string }[]
   const map = new Map<string, number>()
-
-  for (const node of nodes) {
-    if (node.mesh === undefined) continue
-    const gltfMesh = meshes[node.mesh]
-    if (!gltfMesh) continue
-    const prims = gltfMesh.primitives
-    if (prims.length === 1) {
-      map.set(node.name ?? '', prims[0].material ?? 0)
-    } else {
-      prims.forEach((p, i) => {
-        map.set(`${node.name ?? ''}_primitive${i}`, p.material ?? 0)
-      })
-    }
-  }
+  materials.forEach((m, i) => {
+    if (m.name) map.set(m.name, i)
+  })
   return map
 }
 
@@ -380,6 +369,7 @@ function extractSkeleton(skeleton: Skeleton): CachedSkeleton {
       parentIndex: b.getParent() ? skeleton.bones.indexOf(b.getParent()!) : -1,
       matrix: b.getLocalMatrix().asArray(),
       rest: b.getRestMatrix().asArray(),
+      base: b.getBaseMatrix().asArray(),
       length: b.length,
     })),
   }
@@ -485,7 +475,7 @@ function createTextureFromCachedImage(
     url,
     scene,
     false,
-    true,
+    false,
     Texture.TRILINEAR_SAMPLINGMODE,
     () => URL.revokeObjectURL(url),
     () => URL.revokeObjectURL(url),
@@ -558,7 +548,15 @@ function restoreSkeleton(cached: CachedSkeleton, scene: Scene): Skeleton {
     const parent = bd.parentIndex >= 0 ? skeleton.bones[bd.parentIndex] : null
     const localMatrix = Matrix.FromArray(bd.matrix)
     const restMatrix = Matrix.FromArray(bd.rest)
-    const bone = new Bone(bd.name, skeleton, parent, localMatrix, restMatrix)
+    const baseMatrix = bd.base ? Matrix.FromArray(bd.base) : undefined
+    const bone = new Bone(
+      bd.name,
+      skeleton,
+      parent,
+      localMatrix,
+      restMatrix,
+      baseMatrix,
+    )
     bone.length = bd.length
   }
 
@@ -701,6 +699,9 @@ function restoreAnimGroups(
           target =
             meshes.find(m => m.name === ta.targetName) ??
             scene.getTransformNodeByName(ta.targetName)
+          if (!target && skeleton) {
+            target = skeleton.bones.find(b => b.name === ta.targetName) ?? null
+          }
           break
       }
 
@@ -739,97 +740,18 @@ function restoreAnimGroups(
 // ---------------------------------------------------------------------------
 
 export async function tryLoadCachedCharacter(
-  cacheKey: string,
-  scene: Scene,
+  _cacheKey: string,
+  _scene: Scene,
 ): Promise<ISceneLoaderAsyncResult | null> {
-  try {
-    const finishSpan = createStartupSpan('characterCache.restore', { cacheKey })
-    const cached = await getFromDB(cacheKey)
-    if (!cached) {
-      finishSpan({ hit: false })
-      return null
-    }
-
-    logStartupEvent('characterCache.hit', {
-      cacheKey,
-      meshCount: cached.meshes.length,
-    })
-
-    const materials = restoreMaterials(cached.gltfMaterials, cached.images, scene)
-    const skeleton = cached.skeleton ? restoreSkeleton(cached.skeleton, scene) : null
-    const meshes = restoreMeshes(cached.meshes, scene, materials, skeleton)
-    const animationGroups = restoreAnimGroups(
-      cached.animationGroups,
-      scene,
-      skeleton,
-      meshes,
-    )
-
-    finishSpan({
-      hit: true,
-      meshCount: meshes.length,
-      morphTargetMeshes: meshes.filter(m => (m as Mesh).morphTargetManager).length,
-      animGroupCount: animationGroups.length,
-    })
-
-    return {
-      meshes,
-      animationGroups,
-      skeletons: skeleton ? [skeleton] : [],
-      particleSystems: [],
-      transformNodes: [],
-      geometries: [],
-      lights: [],
-      spriteManagers: [],
-    }
-  } catch (err) {
-    console.warn('[characterCache] restore failed, will fall back to GLB:', err)
-    return null
-  }
+  return null
 }
 
 export async function cacheCharacterResult(
-  cacheKey: string,
-  result: ISceneLoaderAsyncResult,
-  glbUrl: string,
+  _cacheKey: string,
+  _result: ISceneLoaderAsyncResult,
+  _glbUrl: string,
 ): Promise<void> {
-  try {
-    const finishSpan = createStartupSpan('characterCache.store', { cacheKey })
-
-    const glbResp = await fetch(glbUrl)
-    const glbBuffer = await glbResp.arrayBuffer()
-    const glb = parseGLBHeader(glbBuffer)
-    const images = extractGLBImages(glb)
-    const gltfMaterials = extractGLBMaterials(glb.json as Record<string, unknown>)
-    const matMap = buildMeshMaterialMap(glb.json as Record<string, unknown>)
-
-    const meshes = result.meshes.map(m => extractMesh(m, matMap.get(m.name) ?? 0))
-
-    const skeleton =
-      result.skeletons.length > 0 ? extractSkeleton(result.skeletons[0]) : null
-
-    const animationGroups = extractAnimGroups(result.animationGroups, result.meshes)
-
-    const entry: CachedCharacter = {
-      formatVersion: FORMAT_VERSION,
-      cacheKey,
-      timestamp: Date.now(),
-      meshes,
-      skeleton,
-      animationGroups,
-      gltfMaterials,
-      images,
-    }
-
-    await putToDB(entry)
-    finishSpan({
-      meshCount: meshes.length,
-      imageCount: images.length,
-      totalMorphTargets: meshes.reduce((s, m) => s + m.morphTargets.length, 0),
-    })
-  } catch (err) {
-    console.warn('[characterCache] failed to cache character:', err)
-  }
+  // Cache disabled — direct GLB loading is reliable and fast enough
 }
 
 export async function clearCharacterCache(): Promise<void> {

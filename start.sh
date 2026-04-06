@@ -43,7 +43,7 @@ update_env_var() {
 # Handle Docker environment variable overrides
 echo "Processing Docker environment variable overrides..."
 # Get all environment variables starting with specific prefixes and override values in .env file
-for env_var in $(env | grep -E '^(NODE_ENV|NEXT_PUBLIC_|PORT|DATABASE_|API_)' | cut -d= -f1); do
+for env_var in $(env | grep -E '^(NODE_ENV|NEXT_PUBLIC_|PORT|API_|LEGACY_|MONGODB_)' | cut -d= -f1); do
     value="${!env_var}"
     if [ -n "$value" ]; then
         echo "Overriding from Docker environment variable: $env_var=$value"
@@ -100,6 +100,27 @@ if [ -f "$ENV_FILE" ]; then
 else
     echo "Warning: Environment variable file does not exist: $ENV_FILE"
 fi
+
+# Generate runtime env.js for client-side __DLP3D_ENV__
+echo "Generating public/env.js from current environment..."
+ENV_JS_PATH="/app/public/env.js"
+cat > "$ENV_JS_PATH" << ENVEOF
+window.__DLP3D_ENV__ = window.__DLP3D_ENV__ || {
+  NEXT_PUBLIC_ORCHESTRATOR_HOST: "${NEXT_PUBLIC_ORCHESTRATOR_HOST:-127.0.0.1}",
+  NEXT_PUBLIC_ORCHESTRATOR_PORT: "${NEXT_PUBLIC_ORCHESTRATOR_PORT:-18002}",
+  NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX: "${NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX:-/api/v4}",
+  NEXT_PUBLIC_ORCHESTRATOR_TIMEOUT: "${NEXT_PUBLIC_ORCHESTRATOR_TIMEOUT:-10}",
+  NEXT_PUBLIC_BACKEND_HOST: "${NEXT_PUBLIC_BACKEND_HOST:-127.0.0.1}",
+  NEXT_PUBLIC_BACKEND_PORT: "${NEXT_PUBLIC_BACKEND_PORT:-18001}",
+  NEXT_PUBLIC_BACKEND_PATH_PREFIX: "${NEXT_PUBLIC_BACKEND_PATH_PREFIX:-/api/v1}",
+  NEXT_PUBLIC_MOTION_FILE_TIMEOUT: "${NEXT_PUBLIC_MOTION_FILE_TIMEOUT:-60}",
+  NEXT_PUBLIC_MAX_FRONT_EXTENSION_DURATION: "${NEXT_PUBLIC_MAX_FRONT_EXTENSION_DURATION:-1.0}",
+  NEXT_PUBLIC_MAX_REAR_EXTENSION_DURATION: "${NEXT_PUBLIC_MAX_REAR_EXTENSION_DURATION:-10.0}",
+  NEXT_PUBLIC_LANGUAGE: "${NEXT_PUBLIC_LANGUAGE:-zh}",
+};
+ENVEOF
+echo "Generated env.js:"
+cat "$ENV_JS_PATH"
 
 # Start application
 echo "Starting application..."

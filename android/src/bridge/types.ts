@@ -67,4 +67,5 @@ export type NativeToWebViewEvent =
   | { type: 'character:select'; payload: { characterId: string; modelIndex: number } }
   | { type: 'scene:select'; payload: { sceneIndex: number } }
   | { type: 'chat:requestNew'; payload: { modelIndex?: number } }
-  | { type: 'assets:manifest'; payload: NativeAssetManifest };
+  | { type: 'assets:manifest'; payload: NativeAssetManifest }
+  | { type: 'face:position'; payload: { x: number; y: number } };

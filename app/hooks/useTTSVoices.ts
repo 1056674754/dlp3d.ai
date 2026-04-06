@@ -60,7 +60,14 @@ async function fetchTTSVoices(
   ttsName: string,
   signal?: AbortSignal,
 ): Promise<VoiceOption[]> {
-  const url = `https://${getOrchestratorHost()}:${getOrchestratorPort()}${getOrchestratorPathPrefix()}/tts_voice_names/${ttsName}`
+  const host = getOrchestratorHost()
+  let baseUrl: string
+  if (!host || host === '__SAME_ORIGIN__') {
+    baseUrl = typeof window !== 'undefined' ? window.location.origin : ''
+  } else {
+    baseUrl = `https://${host}:${getOrchestratorPort()}`
+  }
+  const url = `${baseUrl}${getOrchestratorPathPrefix()}/tts_voice_names/${ttsName}`
 
   try {
     const controller = new AbortController()

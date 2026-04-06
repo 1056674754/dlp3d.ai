@@ -1,7 +1,6 @@
 FROM node:22-bullseye-slim AS base
 
 RUN corepack enable
-
 RUN corepack prepare pnpm@latest --activate
 
 FROM base AS deps
@@ -36,8 +35,6 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-RUN mkdir -p  /app/data
-
 COPY start.sh ./
 RUN chmod +x start.sh
 
@@ -46,8 +43,6 @@ COPY .env ./
 RUN chown -R nextjs:nodejs /app
 
 ENV NODE_ENV=production
-
-VOLUME ["/app/data"]
 
 USER nextjs
 

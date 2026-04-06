@@ -73,19 +73,29 @@ const baseOptions = {
  *
  * Uses the backend host configuration and includes all base options.
  */
+function buildPrefixUrl(host: string, port: string, pathPrefix: string): string {
+  if (!host || host === '__SAME_ORIGIN__') {
+    const origin = typeof window !== 'undefined' ? window.location.origin : ''
+    return `${origin}${pathPrefix}`
+  }
+  return `https://${host}:${port}${pathPrefix}`
+}
+
 export const kyMotionFile = ky.create({
   ...baseOptions,
-  prefixUrl: `https://${NEXT_PUBLIC_BACKEND_HOST}:${NEXT_PUBLIC_BACKEND_PORT}${NEXT_PUBLIC_BACKEND_PATH_PREFIX}`,
+  prefixUrl: buildPrefixUrl(
+    NEXT_PUBLIC_BACKEND_HOST,
+    NEXT_PUBLIC_BACKEND_PORT,
+    NEXT_PUBLIC_BACKEND_PATH_PREFIX,
+  ),
 })
 
-/**
- * Ky instance configured for orchestrator API requests.
- *
- * Uses the orchestrator host configuration, includes all base options,
- * and disables throwing HTTP errors for better error handling.
- */
 export const kyOrchestrator = ky.create({
   ...baseOptions,
-  prefixUrl: `https://${NEXT_PUBLIC_ORCHESTRATOR_HOST}:${NEXT_PUBLIC_ORCHESTRATOR_PORT}${NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX}`,
+  prefixUrl: buildPrefixUrl(
+    NEXT_PUBLIC_ORCHESTRATOR_HOST,
+    NEXT_PUBLIC_ORCHESTRATOR_PORT,
+    NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX,
+  ),
   throwHttpErrors: false,
 })
