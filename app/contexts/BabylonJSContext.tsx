@@ -14,6 +14,7 @@ import onSceneReady from '@/library/babylonjs/onSceneReady'
 import { BabylonJSContextType } from '@/types/babylonjs'
 import { GlobalState } from '@/library/babylonjs/core'
 import useWebSocket from '@/hooks/useWebSocket'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 import { useAudioStream } from '@/hooks/useAudioStream'
 import { AudioRecordState } from '@/data_structures/audioStreamState'
 import { WebSocketConnectionState } from '@/data_structures/webSocketState'
@@ -56,7 +57,110 @@ function BabylonJSProvider({
   const isFlushingQueue = useRef(false)
   const currentFlushPromise = useRef<Promise<void> | null>(null)
   const isUserStreamingRef = useRef<boolean>(false)
-  const useHavokPhysics = true
+  const havokWasmBlobUrlRef = useRef<string | null>(null)
+  const recentPcmBufferRef = useRef<Array<{ buffer: ArrayBuffer; level: number }>>(
+    [],
+  )
+  const currentUtteranceStatsRef = useRef({
+    chunkCount: 0,
+    prebufferedChunkCount: 0,
+    totalLevel: 0,
+    maxLevel: 0,
+  })
+  const isEmbeddedAndroidAssetWebView =
+    typeof window !== 'undefined' &&
+    window.location.protocol === 'file:' &&
+    window.location.pathname.startsWith('/android_asset/web/') &&
+    Boolean(
+      (
+        window as Window & {
+          __DLP3D_EMBEDDED_IN_RN__?: boolean
+        }
+      ).__DLP3D_EMBEDDED_IN_RN__,
+    )
+  const useHavokPhysics =
+    typeof window !== 'undefined' &&
+    (window.location.protocol !== 'file:' || isEmbeddedAndroidAssetWebView)
+  const maxRecentPcmChunks = 48
+
+  const createHavokModuleConfig = async () => {
+    if (!isEmbeddedAndroidAssetWebView) {
+      return undefined
+    }
+
+    if (!havokWasmBlobUrlRef.current) {
+      const wasmUrl = resolvePublicUrl('/scripts/HavokPhysics.wasm')
+      const wasmBlob = await new Promise<Blob>((resolve, reject) => {
+        const request = new XMLHttpRequest()
+        request.open('GET', wasmUrl, true)
+        request.responseType = 'blob'
+        request.onload = () => {
+          if (
+            request.status === 0 ||
+            (request.status >= 200 && request.status < 300)
+          ) {
+            resolve(request.response)
+            return
+          }
+          reject(
+            new Error(
+              `Failed to load Havok wasm via XHR: ${request.status} ${request.statusText}`,
+            ),
+          )
+        }
+        request.onerror = () => {
+          reject(new Error('Failed to load Havok wasm via XHR'))
+        }
+        request.send()
+      })
+      havokWasmBlobUrlRef.current = URL.createObjectURL(wasmBlob)
+    }
+
+    return {
+      locateFile: (path: string) =>
+        path.endsWith('.wasm') && havokWasmBlobUrlRef.current
+          ? havokWasmBlobUrlRef.current
+          : path,
+    }
+  }
+
+  const appendRecentPcmBuffer = (buffer: ArrayBuffer, level: number) => {
+    recentPcmBufferRef.current.push({ buffer, level })
+    if (recentPcmBufferRef.current.length > maxRecentPcmChunks) {
+      recentPcmBufferRef.current.splice(
+        0,
+        recentPcmBufferRef.current.length - maxRecentPcmChunks,
+      )
+    }
+  }
+
+  const resetUtteranceStats = (prebufferedChunkCount: number = 0) => {
+    currentUtteranceStatsRef.current = {
+      chunkCount: 0,
+      prebufferedChunkCount,
+      totalLevel: 0,
+      maxLevel: 0,
+    }
+  }
+
+  const trackUtteranceChunk = (level: number) => {
+    const stats = currentUtteranceStatsRef.current
+    stats.chunkCount += 1
+    stats.totalLevel += level
+    stats.maxLevel = Math.max(stats.maxLevel, level)
+  }
+
+  const logUtteranceStats = () => {
+    const stats = currentUtteranceStatsRef.current
+    if (stats.chunkCount === 0) {
+      console.warn('[AudioStream] no PCM chunks were streamed during this utterance')
+      return
+    }
+    const averageLevel = stats.totalLevel / stats.chunkCount
+    console.log(
+      `[AudioStream] streamed ${stats.chunkCount} pcm chunks (${stats.prebufferedChunkCount} prebuffered), avgLevel=${averageLevel.toFixed(3)}, maxLevel=${stats.maxLevel.toFixed(3)}`,
+    )
+  }
 
   // Initialize Babylon scene
   useEffect(() => {
@@ -79,11 +183,16 @@ function BabylonJSProvider({
     babylonGlobalState.webSocketState = webSocketState
     setGlobalState(babylonGlobalState)
     if (useHavokPhysics) {
-      HavokPhysics().then(havokInterface => {
-        // Havok is now available
-        const havokPlugin = new HavokPlugin(true, havokInterface)
-        babylonScene.enablePhysics(new Vector3(0, -9.8 * 1, 0), havokPlugin)
-      })
+      createHavokModuleConfig()
+        .then(havokModuleConfig => HavokPhysics(havokModuleConfig))
+        .then(havokInterface => {
+          // Havok is now available
+          const havokPlugin = new HavokPlugin(true, havokInterface)
+          babylonScene.enablePhysics(new Vector3(0, -9.8 * 1, 0), havokPlugin)
+        })
+        .catch(error => {
+          console.error('Failed to initialize Havok physics:', error)
+        })
       babylonGlobalState.utilityLayer = new UtilityLayerRenderer(babylonScene)
     }
 
@@ -107,6 +216,10 @@ function BabylonJSProvider({
     if (window) window.addEventListener('resize', resize)
 
     return () => {
+      if (havokWasmBlobUrlRef.current) {
+        URL.revokeObjectURL(havokWasmBlobUrlRef.current)
+        havokWasmBlobUrlRef.current = null
+      }
       babylonScene.getEngine().dispose()
       if (window) window.removeEventListener('resize', resize)
       setIsSceneInitialized(false)
@@ -199,10 +312,7 @@ function BabylonJSProvider({
     return currentFlushPromise.current
   }
 
-  const audioStreamState = useAudioStream(pcm => {
-    if (isUserStreamingRef.current === false) {
-      return
-    }
+  const audioStreamState = useAudioStream((pcm, meta) => {
     const pb_request = new orchestrator_v4.orchestrator_v4.OrchestratorV4Request()
     pb_request.className = 'AudioChunkBody'
     pb_request.data = new Uint8Array(pcm.buffer)
@@ -212,6 +322,12 @@ function BabylonJSProvider({
       ).finish()
     const buffer = uint8Array2ArrayBuffer(data_bytes)
 
+    appendRecentPcmBuffer(buffer, meta.level)
+    if (isUserStreamingRef.current === false) {
+      return
+    }
+
+    trackUtteranceChunk(meta.level)
     sendOrQueuePCM(buffer)
   })
 
@@ -242,6 +358,16 @@ function BabylonJSProvider({
 
     // Listen to the observable for recording state changes
     const onUserStreamingStateChanged = (isStreaming: boolean) => {
+      if (isStreaming) {
+        const prebufferSnapshot = recentPcmBufferRef.current.slice()
+        resetUtteranceStats(prebufferSnapshot.length)
+        prebufferSnapshot.forEach(chunk => {
+          trackUtteranceChunk(chunk.level)
+          sendOrQueuePCM(chunk.buffer)
+        })
+      } else {
+        logUtteranceStats()
+      }
       isUserStreamingRef.current = isStreaming
     }
 
@@ -266,11 +392,16 @@ function BabylonJSProvider({
     const onRecord = (state: AudioRecordState) => {
       globalState.updateAudioStreamState(state)
     }
+    const onMicLevel = (level: number) => {
+      globalState.updateMicLevel(level)
+    }
 
     audioStreamState.onRecordStateChange(onRecord)
+    audioStreamState.onMicLevelChange(onMicLevel)
 
     return () => {
       audioStreamState.offRecordStateChange(onRecord)
+      audioStreamState.offMicLevelChange(onMicLevel)
     }
   }, [globalState, audioStreamState])
 

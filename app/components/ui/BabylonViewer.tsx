@@ -31,6 +31,7 @@ import {
   AnimationGroup,
   Quaternion,
 } from '@babylonjs/core'
+import { PhotoDome } from '@babylonjs/core/Helpers/photoDome'
 import { GLTFFileLoader } from '@babylonjs/loaders'
 import '@babylonjs/loaders/glTF'
 import {
@@ -43,10 +44,20 @@ import {
 } from '@babylonjs/gui'
 import { loadGroundMeshForHDR } from '../../library/babylonjs/utils/loadMesh'
 import { LoadingProgressManager } from '../../utils/progressManager'
-import { HDRI_SCENES } from '@/library/babylonjs/config/scene'
-import { getCharacterModelUrl, resolveHdriUrl } from '@/utils/nativeAssets'
+import {
+  HDRI_SCENES,
+  SKYBOX_ENVIRONMENT_INTENSITY,
+  SKYBOX_BLUR_LEVEL,
+  SKYBOX_Y_ROTATION_DEGREES,
+} from '@/library/babylonjs/config/scene'
+import {
+  getCharacterModelUrl,
+  resolveBabylonAssetUrl,
+  resolveHdriUrl,
+} from '@/utils/nativeAssets'
 import { createStartupSpan, logStartupEvent } from '@/utils/startupProfiler'
 import { tryLoadCachedCharacter, cacheCharacterResult } from '@/utils/characterCache'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 
 function waitForNextFrames(frameCount: number): Promise<void> {
   let remaining = Math.max(1, frameCount)
@@ -162,6 +173,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
     const engineRef = useRef<Engine | null>(null)
     const sceneRef = useRef<Scene | null>(null)
     const hdrTextureRef = useRef<EquiRectangularCubeTexture | null>(null)
+    const photoDomeRef = useRef<PhotoDome | null>(null)
     const characterMeshRef = useRef<AbstractMesh[] | null>(null)
     const cameraRef = useRef<ArcRotateCamera | null>(null)
     const particleSystemRef = useRef<ParticleSystem | null>(null)
@@ -280,7 +292,10 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
       rect.addControl(stack)
 
       // Title logo image with enhanced glow effect
-      const titleLogo = new Image('titleLogo', '/img/logo-title.png')
+      const titleLogo = new Image(
+        'titleLogo',
+        resolvePublicUrl('/img/logo-title.png'),
+      )
       titleLogo.width = '65%'
       titleLogo.height = '100px'
       titleLogo.top = '-10px'
@@ -361,7 +376,11 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
      */
     const loadCharacter = useCallback(
       async (characterIndex: number) => {
-        if (!sceneRef.current) return
+        if (!sceneRef.current) {
+          console.error('[BabylonViewer] loadCharacter called but sceneRef is null')
+          if (onCharacterLoaded) onCharacterLoaded()
+          return
+        }
         const finishCharacterLoad = createStartupSpan('babylon.character-load', {
           characterIndex,
         })
@@ -418,14 +437,23 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
           let result = await tryLoadCachedCharacter(cacheKey, sceneRef.current!)
 
           if (!result) {
-            const slash = modelUrl.lastIndexOf('/')
-            const rootUrl = modelUrl.slice(0, slash + 1)
-            const meshFile = modelUrl.slice(slash + 1)
+            const loadableModelUrl = await resolveBabylonAssetUrl(
+              modelUrl,
+              'model/gltf-binary',
+            )
+            const isBlobUrl = loadableModelUrl.startsWith('blob:')
+            const slash = loadableModelUrl.lastIndexOf('/')
+            const rootUrl = isBlobUrl ? '' : loadableModelUrl.slice(0, slash + 1)
+            const meshFile = isBlobUrl
+              ? loadableModelUrl
+              : loadableModelUrl.slice(slash + 1)
             result = await SceneLoader.ImportMeshAsync(
               '',
               rootUrl,
               meshFile,
               sceneRef.current,
+              undefined,
+              '.glb',
             )
             void cacheCharacterResult(cacheKey, result, modelUrl)
           }
@@ -676,6 +704,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
             finishCharacterLoad({
               meshCount: 0,
             })
+            if (onCharacterLoaded) onCharacterLoaded()
           }
         } catch (error) {
           finishCharacterLoad({
@@ -697,6 +726,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
           placeholder.material = material
 
           characterMeshRef.current = [placeholder]
+          if (onCharacterLoaded) onCharacterLoaded()
         }
       },
       [onCharacterLoaded],
@@ -716,7 +746,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
         scene,
       )
       bodyGlowSystemCircle.particleTexture = new Texture(
-        '/img/particle_circle.png.png',
+        resolvePublicUrl('/img/particle_circle.png.png'),
         scene,
       )
       bodyGlowSystemCircle.emitter = new Vector3(0, 0.8, 0) // Character center
@@ -742,7 +772,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
       // Add surrounding particle effects
       const ringParticleSystem = new ParticleSystem('ringParticleEffect', 50, scene)
       ringParticleSystem.particleTexture = new Texture(
-        '/img/particle_circle.png.png',
+        resolvePublicUrl('/img/particle_circle.png.png'),
         scene,
       )
       ringParticleSystem.emitter = new Vector3(0, 0.8, 0) // Character center
@@ -920,7 +950,7 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
 
           // Create a simple white dot texture for particles
           const particleTexture = new Texture(
-            '/img/particle_circle.png.png',
+            resolvePublicUrl('/img/particle_circle.png.png'),
             sceneRef.current,
           )
           particleSystem.particleTexture = particleTexture
@@ -1060,43 +1090,92 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
         // Update HDR texture
         if (hdrTextureRef.current) {
           hdrTextureRef.current.dispose()
+          hdrTextureRef.current = null
+        }
+        if (photoDomeRef.current) {
+          photoDomeRef.current.dispose()
+          photoDomeRef.current = null
         }
         const sceneConfig = HDRI_SCENES.find(scene => scene.name === sceneName)!
         const image = resolveHdriUrl(sceneConfig.hdri)
         const pathname =
           typeof window !== 'undefined' ? window.location.pathname : ''
+        const isEmbeddedAndroidAssetWebView =
+          typeof window !== 'undefined' &&
+          window.location.protocol === 'file:' &&
+          pathname.startsWith('/android_asset/web/') &&
+          Boolean(
+            (
+              window as Window & {
+                __DLP3D_EMBEDDED_IN_RN__?: boolean
+              }
+            ).__DLP3D_EMBEDDED_IN_RN__,
+          )
         const isHomepageDefaultScene =
           (pathname === '/' || pathname.endsWith('/index.html')) &&
           sceneConfig.name === 'Vast'
         const hdrTextureSize = isHomepageDefaultScene ? 512 : 1024
 
-        const newHdrTexture = new EquiRectangularCubeTexture(
-          image,
-          sceneRef.current,
-          hdrTextureSize,
-        )
-        sceneRef.current.environmentTexture = newHdrTexture
+        const hdrTextureReadyPromise = isEmbeddedAndroidAssetWebView
+          ? resolveBabylonAssetUrl(image, 'image/jpeg', 'dataUrl').then(
+              loadableImage => {
+                if (canceled || !sceneRef.current) return undefined
 
-        // Set environment intensity to brighter level for better visibility
-        sceneRef.current.environmentIntensity = 0.9
+                const oldSkybox = sceneRef.current.getMeshByName('skyBox')
+                if (oldSkybox) {
+                  oldSkybox.dispose()
+                }
 
-        // Dispose existing skybox if it exists
-        const oldSkybox = sceneRef.current.getMeshByName('skyBox')
-        if (oldSkybox) {
-          oldSkybox.dispose()
-        }
-        const skybox = sceneRef.current.createDefaultSkybox(
-          newHdrTexture,
-          true,
-          1000,
-          0.8,
-        )
+                const photoDome = new PhotoDome(
+                  'androidSkyDome',
+                  loadableImage,
+                  {
+                    resolution: isHomepageDefaultScene ? 16 : 24,
+                    size: 1000,
+                  },
+                  sceneRef.current,
+                )
+                photoDomeRef.current = photoDome
+                return undefined
+              },
+            )
+          : resolveBabylonAssetUrl(image, 'image/jpeg', 'dataUrl').then(
+              loadableImage => {
+                if (canceled || !sceneRef.current) return
 
-        // Rotate skybox 15 degrees counterclockwise to rotate HDR environment
-        if (skybox) {
-          skybox.rotate(new Vector3(0, 1, 0), Tools.ToRadians(15))
-        }
-        hdrTextureRef.current = newHdrTexture
+                const newHdrTexture = new EquiRectangularCubeTexture(
+                  loadableImage,
+                  sceneRef.current,
+                  hdrTextureSize,
+                )
+                sceneRef.current.environmentTexture = newHdrTexture
+
+                // Set environment intensity to brighter level for better visibility
+                sceneRef.current.environmentIntensity = SKYBOX_ENVIRONMENT_INTENSITY
+
+                // Dispose existing skybox if it exists
+                const oldSkybox = sceneRef.current.getMeshByName('skyBox')
+                if (oldSkybox) {
+                  oldSkybox.dispose()
+                }
+                const skybox = sceneRef.current.createDefaultSkybox(
+                  newHdrTexture,
+                  true,
+                  1000,
+                  SKYBOX_BLUR_LEVEL,
+                )
+
+                // Rotate skybox 15 degrees counterclockwise to rotate HDR environment
+                if (skybox) {
+                  skybox.rotate(
+                    new Vector3(0, 1, 0),
+                    Tools.ToRadians(SKYBOX_Y_ROTATION_DEGREES),
+                  )
+                }
+                hdrTextureRef.current = newHdrTexture
+                return newHdrTexture
+              },
+            )
 
         // Dispose existing ground mesh (supports both array and single mesh)
         if (currentGroundMeshRef.current) {
@@ -1192,9 +1271,17 @@ const BabylonViewer = forwardRef<BabylonViewerRef, BabylonViewerProps>(
             finishHdrLoad = createStartupSpan('babylon.scene.hdr', {
               sceneName,
               textureSize: hdrTextureSize,
+              skippedForAndroidPackagedWebView: isEmbeddedAndroidAssetWebView,
             })
-            await waitForTextureReady(newHdrTexture)
-            finishHdrLoad()
+            const readyHdrTexture = await hdrTextureReadyPromise
+            if (!readyHdrTexture) {
+              finishHdrLoad({
+                androidPhotoDome: isEmbeddedAndroidAssetWebView,
+              })
+            } else {
+              await waitForTextureReady(readyHdrTexture)
+              finishHdrLoad()
+            }
 
             const groundModel = sceneConfig.groundModel
             const groundPromise = groundModel

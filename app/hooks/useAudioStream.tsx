@@ -9,6 +9,16 @@ import {
 import { EventEmitter } from './eventEmitter'
 import { errorBus } from '../utils/errorBus'
 import i18n from '@/i18n/config'
+import { resolvePublicUrl } from '@/utils/publicUrl'
+
+type PCMChunkMeta = {
+  level: number
+}
+
+type WorkletAudioMessage = {
+  buffer: ArrayBuffer
+  level?: number
+}
 
 /**
  * PCMStreamHook
@@ -16,7 +26,9 @@ import i18n from '@/i18n/config'
  * A type describing a React hook that captures microphone audio, streams
  * 16-bit PCM frames via a callback, and returns recording controls and state.
  */
-type PCMStreamHook = (onPCMData: (pcm: Int16Array) => void) => AudioStreamState
+type PCMStreamHook = (
+  onPCMData: (pcm: Int16Array, meta: PCMChunkMeta) => void,
+) => AudioStreamState
 
 /**
  * useAudioStream
@@ -38,10 +50,47 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
   const [recordState, setRecordState] = useState<AudioRecordState>(
     AudioRecordState.NOT_RECORDING,
   )
+  const [micLevel, setMicLevel] = useState(0)
+  const micLevelRef = useRef(0)
+  const lastMicLevelEmitAtRef = useRef(0)
 
   const eventEmitter = useRef(
     new EventEmitter<StreamedAudioEvents, StreamedAudioEventPayloads>(),
   ).current
+
+  const updateMicLevel = useCallback(
+    (rawLevel: number) => {
+      const normalizedLevel =
+        rawLevel > 0 ? Math.min(1, Math.sqrt(Math.min(1, rawLevel * 18))) : 0
+      const previousLevel = micLevelRef.current
+      const nextLevel =
+        normalizedLevel > previousLevel
+          ? previousLevel * 0.45 + normalizedLevel * 0.55
+          : previousLevel * 0.82 + normalizedLevel * 0.18
+      const clampedLevel = nextLevel < 0.015 ? 0 : Math.min(1, nextLevel)
+
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      if (
+        now - lastMicLevelEmitAtRef.current >= 48 ||
+        clampedLevel === 0 ||
+        Math.abs(clampedLevel - previousLevel) >= 0.08
+      ) {
+        lastMicLevelEmitAtRef.current = now
+        setMicLevel(clampedLevel)
+        eventEmitter.emit(StreamedAudioEvents.MIC_LEVEL, clampedLevel)
+      }
+      micLevelRef.current = clampedLevel
+    },
+    [eventEmitter],
+  )
+
+  const resetMicLevel = useCallback(() => {
+    micLevelRef.current = 0
+    lastMicLevelEmitAtRef.current =
+      typeof performance !== 'undefined' ? performance.now() : Date.now()
+    setMicLevel(0)
+    eventEmitter.emit(StreamedAudioEvents.MIC_LEVEL, 0)
+  }, [eventEmitter])
 
   /**
    * Check microphone device availability and permission state.
@@ -52,12 +101,15 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
    */
   const checkDevice = useCallback(async (): Promise<AudioRecordState> => {
     try {
+      console.log('[AudioStream] checking microphone availability')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       // Immediately stop the stream since we only needed to check permissions
       stream.getTracks().forEach(track => track.stop())
+      console.log('[AudioStream] microphone is available')
       return AudioRecordState.NOT_RECORDING
     } catch (err: unknown) {
       const name = (err as { name?: string }).name ?? 'UnknownError'
+      console.error(`[AudioStream] checkDevice failed: ${name}`)
       if (name === 'NotAllowedError') {
         return AudioRecordState.PERMISSION_DENIED
       } else if (name === 'NotFoundError') {
@@ -80,17 +132,29 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
     if (recordState === AudioRecordState.RECORDING) return
 
     try {
+      console.log('[AudioStream] startRecord requested')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const audioContext = new AudioContext({
         sampleRate: 16000,
       })
-      await audioContext.audioWorklet.addModule('/StreamedAudioProcessor.js')
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume()
+      }
+      const workletUrl = resolvePublicUrl('/StreamedAudioProcessor.js')
+      console.log(`[AudioStream] loading worklet: ${workletUrl}`)
+      await audioContext.audioWorklet.addModule(workletUrl)
 
       const source = audioContext.createMediaStreamSource(stream)
       const workletNode = new AudioWorkletNode(audioContext, 'pcm-processor')
-      workletNode.port.onmessage = (event: MessageEvent<Int16Array>) => {
-        const newBuffer = new Int16Array(event.data)
-        onPCMData(newBuffer)
+      workletNode.port.onmessage = (event: MessageEvent<WorkletAudioMessage>) => {
+        const payload = event.data
+        if (!payload?.buffer) {
+          return
+        }
+        const rawLevel = payload.level ?? 0
+        updateMicLevel(rawLevel)
+        const newBuffer = new Int16Array(payload.buffer)
+        onPCMData(newBuffer, { level: rawLevel })
       }
 
       source.connect(workletNode).connect(audioContext.destination)
@@ -99,12 +163,15 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
       mediaStreamRef.current = stream
       workletNodeRef.current = workletNode
 
+      resetMicLevel()
       setRecordState(AudioRecordState.RECORDING)
       eventEmitter.emit(StreamedAudioEvents.RECORD_STATE, AudioRecordState.RECORDING)
+      console.log('[AudioStream] recording started')
     } catch (err: unknown) {
       const errorObj = err as { name?: string; message?: string }
       const name = errorObj.name ?? 'UnknownError'
       const message = errorObj.message ?? 'Unknown error'
+      console.error(`[AudioStream] startRecord failed: ${name}: ${message}`)
       if (name === 'NotAllowedError') {
         setRecordState(AudioRecordState.PERMISSION_DENIED)
         eventEmitter.emit(
@@ -147,7 +214,7 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
         })
       }
     }
-  }, [onPCMData, recordState, eventEmitter])
+  }, [eventEmitter, onPCMData, recordState, resetMicLevel, updateMicLevel])
 
   /**
    * Stop capturing microphone audio and release resources.
@@ -157,6 +224,7 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
    * @returns Promise<void>
    */
   const stopRecord = useCallback(async () => {
+    console.log('[AudioStream] stopRecord requested')
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(track => track.stop())
       mediaStreamRef.current = null
@@ -180,12 +248,14 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
       audioContextRef.current = null
     }
 
+    resetMicLevel()
     setRecordState(AudioRecordState.NOT_RECORDING)
     eventEmitter.emit(
       StreamedAudioEvents.RECORD_STATE,
       AudioRecordState.NOT_RECORDING,
     )
-  }, [eventEmitter])
+    console.log('[AudioStream] recording stopped')
+  }, [eventEmitter, resetMicLevel])
 
   // cleanup on unmount
   useEffect(() => {
@@ -194,13 +264,36 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
     }
   }, [stopRecord])
 
+  const onRecordStateChange = useCallback(
+    (cb: (state: AudioRecordState) => void) =>
+      eventEmitter.on(StreamedAudioEvents.RECORD_STATE, cb),
+    [eventEmitter],
+  )
+  const offRecordStateChange = useCallback(
+    (cb: (state: AudioRecordState) => void) =>
+      eventEmitter.off(StreamedAudioEvents.RECORD_STATE, cb),
+    [eventEmitter],
+  )
+  const onMicLevelChange = useCallback(
+    (cb: (level: number) => void) =>
+      eventEmitter.on(StreamedAudioEvents.MIC_LEVEL, cb),
+    [eventEmitter],
+  )
+  const offMicLevelChange = useCallback(
+    (cb: (level: number) => void) =>
+      eventEmitter.off(StreamedAudioEvents.MIC_LEVEL, cb),
+    [eventEmitter],
+  )
+
   return {
     recordState: recordState,
+    micLevel: micLevel,
     startRecord: startRecord,
     stopRecord: stopRecord,
     checkDevice: checkDevice,
-    onRecordStateChange: cb => eventEmitter.on(StreamedAudioEvents.RECORD_STATE, cb),
-    offRecordStateChange: cb =>
-      eventEmitter.off(StreamedAudioEvents.RECORD_STATE, cb),
+    onRecordStateChange: onRecordStateChange,
+    offRecordStateChange: offRecordStateChange,
+    onMicLevelChange: onMicLevelChange,
+    offMicLevelChange: offMicLevelChange,
   }
 }

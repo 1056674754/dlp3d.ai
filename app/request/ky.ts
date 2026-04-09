@@ -1,15 +1,6 @@
 import ky from 'ky'
-import type { KyRequest, NormalizedOptions } from 'ky'
+import type { KyInstance, KyRequest, NormalizedOptions } from 'ky'
 import { getEnv } from '@/utils/env'
-
-const NEXT_PUBLIC_BACKEND_HOST = getEnv('NEXT_PUBLIC_BACKEND_HOST')
-const NEXT_PUBLIC_BACKEND_PORT = getEnv('NEXT_PUBLIC_BACKEND_PORT')
-const NEXT_PUBLIC_BACKEND_PATH_PREFIX = getEnv('NEXT_PUBLIC_BACKEND_PATH_PREFIX')
-const NEXT_PUBLIC_ORCHESTRATOR_HOST = getEnv('NEXT_PUBLIC_ORCHESTRATOR_HOST')
-const NEXT_PUBLIC_ORCHESTRATOR_PORT = getEnv('NEXT_PUBLIC_ORCHESTRATOR_PORT')
-const NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX = getEnv(
-  'NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX',
-)
 
 const baseOptions = {
   timeout: 180000,
@@ -43,27 +34,63 @@ const baseOptions = {
   },
 }
 
-function buildPrefixUrl(host: string, port: string, pathPrefix: string): string {
+function buildPrefixUrl(kind: 'backend' | 'orchestrator'): string {
+  const host = getEnv(
+    kind === 'orchestrator'
+      ? 'NEXT_PUBLIC_ORCHESTRATOR_HOST'
+      : 'NEXT_PUBLIC_BACKEND_HOST',
+  )
+  const port = getEnv(
+    kind === 'orchestrator'
+      ? 'NEXT_PUBLIC_ORCHESTRATOR_PORT'
+      : 'NEXT_PUBLIC_BACKEND_PORT',
+  )
+  const pathPrefix = getEnv(
+    kind === 'orchestrator'
+      ? 'NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX'
+      : 'NEXT_PUBLIC_BACKEND_PATH_PREFIX',
+  )
+
   if (!host || host === '__SAME_ORIGIN__') {
-    const origin = typeof window !== 'undefined' ? window.location.origin : ''
-    return `${origin}${pathPrefix}`
+    if (typeof window !== 'undefined') {
+      if (window.location.protocol === 'file:') {
+        const w = window as unknown as Record<string, unknown>
+        const origin =
+          kind === 'orchestrator'
+            ? (w.__DLP3D_ORCHESTRATOR_ORIGIN__ as string | undefined)
+            : (w.__DLP3D_SERVER_ORIGIN__ as string | undefined)
+        if (origin) return `${origin}${pathPrefix}`
+      }
+      return `${window.location.origin}${pathPrefix}`
+    }
+    return pathPrefix
   }
+  if (!port) return `https://${host}${pathPrefix}`
   return `https://${host}:${port}${pathPrefix}`
 }
 
-export const kyDlpApi = ky.create({
-  ...baseOptions,
-  prefixUrl: buildPrefixUrl(
-    NEXT_PUBLIC_BACKEND_HOST,
-    NEXT_PUBLIC_BACKEND_PORT,
-    NEXT_PUBLIC_BACKEND_PATH_PREFIX,
-  ),
+let _kyDlpApi: KyInstance | null = null
+let _kyDlpConfig: KyInstance | null = null
+
+export const kyDlpApi: KyInstance = new Proxy({} as KyInstance, {
+  get(_target, prop) {
+    if (!_kyDlpApi) {
+      _kyDlpApi = ky.create({ ...baseOptions, prefixUrl: buildPrefixUrl('backend') })
+    }
+    const val = (_kyDlpApi as unknown as Record<string | symbol, unknown>)[prop]
+    return typeof val === 'function' ? val.bind(_kyDlpApi) : val
+  },
 })
-export const kyDlpConfig = ky.create({
-  ...baseOptions,
-  prefixUrl: buildPrefixUrl(
-    NEXT_PUBLIC_ORCHESTRATOR_HOST,
-    NEXT_PUBLIC_ORCHESTRATOR_PORT,
-    NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX,
-  ),
+
+export const kyDlpConfig: KyInstance = new Proxy({} as KyInstance, {
+  get(_target, prop) {
+    if (!_kyDlpConfig) {
+      _kyDlpConfig = ky.create({
+        ...baseOptions,
+        prefixUrl: buildPrefixUrl('orchestrator'),
+      })
+    }
+    const val = (_kyDlpConfig as unknown as Record<string | symbol, unknown>)[prop]
+    return typeof val === 'function' ? val.bind(_kyDlpConfig) : val
+  },
 })

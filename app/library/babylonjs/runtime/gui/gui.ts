@@ -5,6 +5,7 @@ import {
   ConditionedMessage,
 } from '@/library/babylonjs/runtime/fsm/conditions'
 import { Logger } from '@/library/babylonjs/utils'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 
 /**
  * Convert viewport width percentage to pixels.
@@ -106,7 +107,7 @@ export class GUI {
     `
 
     // Load and insert the SVG content
-    fetch('/img/bars-rotate-fade.svg')
+    fetch(resolvePublicUrl('/img/bars-rotate-fade.svg'))
       .then(response => {
         return response.text()
       })
@@ -208,6 +209,9 @@ export class GUI {
     recordAudioButton.disabledColor = 'transparent'
     recordAudioButton.alpha = 1
     recordAudioButton.isEnabled = false
+    if (typeof window !== 'undefined' && (window as any).__DLP3D_EMBEDDED_IN_RN__) {
+      recordAudioButton.isVisible = false
+    }
     // JavaScript-based prevention for Safari on iPad
     if (typeof window !== 'undefined') {
       // Prevent text selection on the button
@@ -249,6 +253,7 @@ export class GUI {
     let isPointerDown: boolean = false
 
     recordAudioButton.onPointerDownObservable.add(async () => {
+      console.log('[GUI] record button pointer down')
       pointerDownTime = Date.now()
       recordingStarted = false
       isPointerDown = true
@@ -266,6 +271,7 @@ export class GUI {
           // If enough time has passed and pointer is still down, start recording
           if (elapsedTime >= 200) {
             recordingStarted = true
+            console.log('[GUI] record hold threshold reached')
             if (this._globalState.runtime?.streamedAnimationPlaying()) {
               this._globalState.stateMachine?.putConditionedMessage(
                 new ConditionedMessage(Conditions.USER_INTERRUPT_ANIMATION, null),
@@ -289,6 +295,7 @@ export class GUI {
     })
 
     recordAudioButton.onPointerUpObservable.add(async () => {
+      console.log('[GUI] record button pointer up')
       isPointerDown = false
 
       if (holdTimer) {

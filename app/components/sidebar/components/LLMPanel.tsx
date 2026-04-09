@@ -23,6 +23,7 @@ import { getAvailableLlm } from '@/request/api'
 import { useDevice } from '@/contexts/DeviceContext'
 import { useTranslation } from 'react-i18next'
 import GlobalTooltip from '@/components/common/GlobalTooltip'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 /**
  * Choice interface for LLM model selection.
  */
@@ -259,26 +260,39 @@ export default function LLMPanel() {
    * @returns string The image URL for the LLM provider.
    */
   const getLLMImage = (key: string) => {
+    let path: string
     switch (key) {
       case 'openai':
-        return '/img/llm/openai.png'
+        path = '/img/llm/openai.png'
+        break
       case 'anthropic':
-        return '/img/llm/anthropic.png'
+        path = '/img/llm/anthropic.png'
+        break
       case 'gemini':
-        return '/img/llm/gemini.png'
+        path = '/img/llm/gemini.png'
+        break
       case 'sensenova':
-        return '/img/llm/sensenova.png'
+        path = '/img/llm/sensenova.png'
+        break
       case 'sensenovaomni':
-        return '/img/llm/sensenova.png'
+        path = '/img/llm/sensenova.png'
+        break
       case 'deepseek':
-        return '/img/llm/deepseek.png'
+        path = '/img/llm/deepseek.png'
+        break
       case 'xai':
-        return '/img/llm/xai.png'
+        path = '/img/llm/xai.png'
+        break
       case 'sensechat':
-        return '/img/llm/sensechat.png'
+        path = '/img/llm/sensechat.png'
+        break
+      case 'qwen':
+        path = '/img/llm/openai.png'
+        break
       default:
-        return '/img/llm/openai.png'
+        path = '/img/llm/openai.png'
     }
+    return resolvePublicUrl(path)
   }
   /**
    * Render the list of available LLM models.

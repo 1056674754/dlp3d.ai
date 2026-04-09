@@ -11,8 +11,10 @@ import { useSelector } from 'react-redux';
 import { useNavigation } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useTheme, IconButton, Divider } from 'react-native-paper';
+import { useTranslation } from 'react-i18next';
 import { DLP3DWebView } from '@/components/webview';
 import type { RootState } from '@/store';
+import { pushDebugLog } from '@/store/debugLogStore';
 
 type TabParamList = {
   Home: undefined;
@@ -28,12 +30,15 @@ type HomeTabNav = BottomTabNavigationProp<TabParamList, 'Home'>;
  */
 export default function HomeScreen() {
   const theme = useTheme();
+  const { t } = useTranslation();
   const navigation = useNavigation<HomeTabNav>();
   const drawerRef = useRef<DrawerLayoutAndroid>(null);
 
   const serverUrl = useSelector((state: RootState) => state.app.serverUrl);
   const language = useSelector((state: RootState) => state.app.language);
   const appTheme = useSelector((state: RootState) => state.app.theme);
+  const isLogin = useSelector((state: RootState) => state.auth.isLogin);
+  const userInfo = useSelector((state: RootState) => state.auth.userInfo);
 
   const closeDrawer = useCallback(() => {
     drawerRef.current?.closeDrawer();
@@ -44,41 +49,59 @@ export default function HomeScreen() {
       <View
         style={[
           styles.drawer,
-          { backgroundColor: theme.colors.surface, borderRightColor: theme.colors.outline },
-        ]}>
+          {
+            backgroundColor: theme.colors.surface,
+            borderRightColor: theme.colors.outline,
+          },
+        ]}
+      >
         <Text style={[styles.drawerTitle, { color: theme.colors.primary }]}>
           DLP3D
         </Text>
         <Text style={[styles.drawerHint, { color: theme.colors.onSurface }]}>
-          Swipe from the left edge or use the buttons below
+          {t('drawer.hint')}
         </Text>
         <Divider style={styles.divider} />
         <Pressable
           style={({ pressed }) => [
             styles.drawerRow,
-            { backgroundColor: pressed ? theme.colors.surfaceVariant : 'transparent' },
+            {
+              backgroundColor: pressed
+                ? theme.colors.surfaceVariant
+                : 'transparent',
+            },
           ]}
           onPress={() => {
             closeDrawer();
             navigation.navigate('ChatList');
-          }}>
-          <IconButton icon="chat" size={22} iconColor={theme.colors.onSurface} />
+          }}
+        >
+          <IconButton
+            icon="chat"
+            size={22}
+            iconColor={theme.colors.onSurface}
+          />
           <Text style={[styles.drawerLabel, { color: theme.colors.onSurface }]}>
-            Conversations
+            {t('drawer.conversations')}
           </Text>
         </Pressable>
         <Pressable
           style={({ pressed }) => [
             styles.drawerRow,
-            { backgroundColor: pressed ? theme.colors.surfaceVariant : 'transparent' },
+            {
+              backgroundColor: pressed
+                ? theme.colors.surfaceVariant
+                : 'transparent',
+            },
           ]}
           onPress={() => {
             closeDrawer();
             navigation.navigate('Settings');
-          }}>
+          }}
+        >
           <IconButton icon="cog" size={22} iconColor={theme.colors.onSurface} />
           <Text style={[styles.drawerLabel, { color: theme.colors.onSurface }]}>
-            Settings
+            {t('drawer.settings')}
           </Text>
         </Pressable>
       </View>
@@ -91,6 +114,18 @@ export default function HomeScreen() {
         serverUrl={serverUrl}
         language={language}
         theme={appTheme}
+        webviewAuth={
+          isLogin && userInfo?.id
+            ? {
+                isLogin: true,
+                userInfo: {
+                  username: userInfo.username,
+                  email: userInfo.email,
+                  id: userInfo.id,
+                },
+              }
+            : undefined
+        }
       />
     </View>
   );
@@ -101,7 +136,8 @@ export default function HomeScreen() {
         ref={drawerRef}
         drawerWidth={280}
         drawerPosition="left"
-        renderNavigationView={renderDrawer}>
+        renderNavigationView={renderDrawer}
+      >
         {web}
       </DrawerLayoutAndroid>
     );

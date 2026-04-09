@@ -26,6 +26,8 @@ export interface CharacterConfig {
   characterId: string;
   characterName: string;
   prompt: string;
+  avatarModelName?: string;
+  readOnly?: boolean;
   sceneIndex: number;
   modelIndex: number;
   createdAt: string;
@@ -39,8 +41,15 @@ export type WebViewToNativeEvent =
   | { type: 'chat:start'; payload: { characterId: string; sceneIndex: number } }
   | { type: 'chat:message'; payload: { role: string; content: string } }
   | { type: 'scene:changed'; payload: { sceneIndex: number } }
-  | { type: 'character:changed'; payload: { characterId: string; modelIndex: number } }
-  | { type: 'loading:state'; payload: { isLoading: boolean; progress?: number; text?: string } }
+  | {
+      type: 'character:changed';
+      payload: { characterId: string; modelIndex: number };
+    }
+  | {
+      type: 'loading:state';
+      payload: { isLoading: boolean; progress?: number; text?: string };
+    }
+  | { type: 'debug:log'; payload: { level?: string; message?: string } }
   | { type: 'error'; payload: { message: string; code?: string } }
   | { type: 'ready'; payload: Record<string, never> }
   | { type: 'screenshot'; payload: { dataUrl: string } }
@@ -64,7 +73,10 @@ export type NativeToWebViewEvent =
   | { type: 'language:change'; payload: { lang: string } }
   | { type: 'theme:change'; payload: { theme: 'light' | 'dark' } }
   | { type: 'webview:navigate'; payload: { path: string } }
-  | { type: 'character:select'; payload: { characterId: string; modelIndex: number } }
+  | {
+      type: 'character:select';
+      payload: { characterId: string; modelIndex: number };
+    }
   | { type: 'scene:select'; payload: { sceneIndex: number } }
   | { type: 'chat:requestNew'; payload: { modelIndex?: number } }
   | { type: 'assets:manifest'; payload: NativeAssetManifest }

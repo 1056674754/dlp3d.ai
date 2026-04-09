@@ -3,6 +3,7 @@
 import Image from 'next/image'
 import { useDevice } from '../../contexts/DeviceContext'
 import { useTranslation } from 'react-i18next'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 interface LogoProps {
   className?: string
 
@@ -56,7 +57,7 @@ export default function Logo({
         style={{ cursor: clickable ? 'pointer' : 'default' }}
       >
         <Image
-          src="/img/logo.png"
+          src={resolvePublicUrl('/img/logo.png')}
           alt="DLP3D Logo"
           width={42}
           height={42}

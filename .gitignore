@@ -87,3 +87,8 @@ public/models/
 public/scripts/
 public/img/hdr/
 public/img/model/
+
+# Root-level device/debug captures (keep accidental screenshots out of git)
+/*.png
+/*.jpg
+/*.jpeg

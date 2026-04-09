@@ -1,4 +1,4 @@
-import { isNativeApp } from '@/utils/nativeBridge'
+import { isNativeApp, sendToNative } from '@/utils/nativeBridge'
 
 /**
  * Build-time / runtime flags for the **static export** used inside the React Native
@@ -12,23 +12,38 @@ export function isPackagedWebviewExport(): boolean {
 }
 
 /**
- * Navigate inside the embedded WebView. For `file://` static export, Next emits
- * `debug.html` for `/debug` (not a SPA router), so map paths to sibling `*.html` files.
+ * Map a Next-style path like `/babylon?scene=3` to the corresponding static
+ * HTML file name for the packaged WebView export.
+ */
+function resolvePackagedHtmlUrl(path: string): string {
+  let normalized = path.trim()
+  if (!normalized.startsWith('/')) normalized = `/${normalized}`
+  const qIdx = normalized.indexOf('?')
+  const pathOnly = qIdx >= 0 ? normalized.slice(0, qIdx) : normalized
+  const search = qIdx >= 0 ? normalized.slice(qIdx) : ''
+  const slug = pathOnly.replace(/^\/+/, '').replace(/\/$/, '')
+  const lastSegment = slug.split('/').pop() || ''
+  const file = slug === '' || slug === 'index' ? 'index.html' : `${lastSegment}.html`
+  return new URL(file + search, window.location.href).href
+}
+
+/**
+ * Navigate inside the embedded WebView.
+ *
+ * In native app (file:// protocol), `window.location.href = ...` does NOT work
+ * in Android WebView. Instead we ask the React Native host to drive the
+ * navigation via `webview:navigate` bridge event.
  */
 export function navigateInPackagedWebview(path: string): void {
   if (typeof window === 'undefined') return
-  let normalized = path.trim()
-  if (!normalized.startsWith('/')) {
-    normalized = `/${normalized}`
-  }
+
   if (isNativeApp() && window.location.protocol === 'file:') {
-    const slug = normalized.replace(/^\/+/, '').replace(/\/$/, '')
-    const file =
-      slug === '' || slug === 'index'
-        ? 'index.html'
-        : `${slug.split('/').pop()}.html`
-    window.location.href = new URL(file, window.location.href).href
+    const url = resolvePackagedHtmlUrl(path)
+    sendToNative({ type: 'webview:navigate', payload: { url } })
     return
   }
+
+  let normalized = path.trim()
+  if (!normalized.startsWith('/')) normalized = `/${normalized}`
   window.location.href = normalized
 }

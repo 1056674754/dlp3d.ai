@@ -41,6 +41,12 @@ export function createInjectedJavaScript(config: {
         notifyError: function(message, code) {
           this.sendEvent('error', { message: message, code: code || '' });
         },
+        notifyDebugLog: function(level, message) {
+          this.sendEvent('debug:log', {
+            level: level || 'log',
+            message: message || ''
+          });
+        },
         notifyAuthStatus: function(isLoggedIn, user) {
           this.sendEvent('auth:status', {
             isLoggedIn: isLoggedIn,
@@ -59,8 +65,11 @@ export function createInjectedJavaScript(config: {
         openSettings: function(panel) {
           this.sendEvent('settings:open', { panel: panel });
         },
-        notifyChatListUpdated: function(chats) {
-          this.sendEvent('chat:list:updated', { chats: chats });
+        notifyChatListUpdated: function(chats, selectedCharacterId) {
+          this.sendEvent('chat:list:updated', {
+            chats: chats,
+            selectedCharacterId: selectedCharacterId || null
+          });
         },
       };
 
@@ -68,6 +77,11 @@ export function createInjectedJavaScript(config: {
       window.addEventListener('nativeMessage', function(e) {
         var detail = e.detail;
         if (detail && detail.type) {
+          if (detail.type === 'auth:logout') {
+            try {
+              localStorage.removeItem('dlp3d_auth_state');
+            } catch (_) {}
+          }
           if (detail.type === 'assets:manifest' && detail.payload) {
             window.__DLP3D_NATIVE_ASSETS__ = detail.payload;
           }
@@ -87,9 +101,38 @@ export function createInjectedJavaScript(config: {
       // Notify RN that bridge is ready
       window.NativeAPI.notifyReady();
 
+      (function patchConsole() {
+        var levels = ['log', 'info', 'warn', 'error'];
+        var stringify = function(value) {
+          if (typeof value === 'string') {
+            return value;
+          }
+          try {
+            return JSON.stringify(value);
+          } catch (_) {
+            return String(value);
+          }
+        };
+
+        levels.forEach(function(level) {
+          var original = console[level];
+          console[level] = function() {
+            try {
+              var parts = Array.prototype.slice.call(arguments).map(stringify);
+              window.NativeAPI.notifyDebugLog(level, parts.join(' '));
+            } catch (_) {}
+            if (original) {
+              return original.apply(console, arguments);
+            }
+          };
+        });
+      })();
+
       window.addEventListener('error', function(e) {
         try {
           var message = e && e.message ? e.message : 'Unknown JavaScript error';
+          var source = e && e.filename ? ' @ ' + e.filename + ':' + e.lineno + ':' + e.colno : '';
+          window.NativeAPI.notifyDebugLog('error', '[window.error] ' + message + source);
           window.NativeAPI.notifyError(message, 'JS_ERROR');
         } catch (_) {}
       });
@@ -103,6 +146,7 @@ export function createInjectedJavaScript(config: {
               : reason && reason.message
                 ? reason.message
                 : 'Unhandled promise rejection';
+          window.NativeAPI.notifyDebugLog('error', '[unhandledrejection] ' + message);
           window.NativeAPI.notifyError(message, 'UNHANDLED_REJECTION');
         } catch (_) {}
       });

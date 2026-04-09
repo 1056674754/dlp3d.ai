@@ -4,6 +4,7 @@
 
 import { isNativeApp } from '@/utils/nativeBridge'
 import { DEFAULT_CHARACTER_MODEL_INDEX } from '@/constants'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 
 const CHARACTER_FILENAMES = [
   'Ani-default_481.glb',
@@ -19,6 +20,8 @@ export type NativeAssetManifest = {
   groundBaseUrl: string
   hdrBaseUrl: string
 }
+
+const nativeBabylonBlobUrlCache = new Map<string, Promise<string>>()
 
 declare global {
   interface Window {
@@ -38,6 +41,95 @@ export function hasNativeAssetManifest(): boolean {
     typeof m.hdrBaseUrl === 'string' &&
     typeof m.characterByModelIndex === 'object'
   )
+}
+
+function resolveNativeManifestUrl(url: string): string {
+  if (typeof window === 'undefined') return url
+  const apkAssetPrefix = 'file:///android_asset/web/'
+  if (window.location.protocol === 'file:' && url.startsWith(apkAssetPrefix)) {
+    return resolvePublicUrl(`/${url.slice(apkAssetPrefix.length)}`)
+  }
+  return url
+}
+
+function shouldUseNativeBabylonBlobUrl(url: string): boolean {
+  if (typeof window === 'undefined') return false
+  return (
+    isNativeApp() &&
+    window.location.protocol === 'file:' &&
+    url.startsWith('file:///android_asset/web/')
+  )
+}
+
+export async function resolveBabylonAssetUrl(
+  url: string,
+  mimeType?: string,
+  transport: 'blobUrl' | 'dataUrl' = 'blobUrl',
+): Promise<string> {
+  if (!shouldUseNativeBabylonBlobUrl(url)) {
+    return url
+  }
+
+  const cacheKey = `${transport}:${url}`
+  const existing = nativeBabylonBlobUrlCache.get(cacheKey)
+  if (existing) {
+    return existing
+  }
+
+  const pending = new Promise<string>((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    request.open('GET', url, true)
+    request.responseType = 'blob'
+    request.onload = () => {
+      if (request.status !== 0 && (request.status < 200 || request.status >= 300)) {
+        reject(
+          new Error(
+            `Failed to load Babylon asset via XHR: ${request.status} ${request.statusText}`,
+          ),
+        )
+        return
+      }
+
+      const responseBlob = request.response
+      const blob =
+        responseBlob instanceof Blob && (!mimeType || responseBlob.type)
+          ? responseBlob
+          : new Blob([responseBlob], {
+              type: mimeType ?? responseBlob?.type ?? undefined,
+            })
+
+      if (transport === 'dataUrl') {
+        const reader = new FileReader()
+        reader.onload = () => {
+          if (typeof reader.result === 'string') {
+            resolve(reader.result)
+            return
+          }
+          reject(new Error('Failed to convert Babylon asset blob to data URL'))
+        }
+        reader.onerror = () => {
+          reject(new Error('Failed to convert Babylon asset blob to data URL'))
+        }
+        reader.readAsDataURL(blob)
+        return
+      }
+
+      resolve(URL.createObjectURL(blob))
+    }
+    request.onerror = () => {
+      reject(new Error('Failed to load Babylon asset via XHR'))
+    }
+    request.send()
+  })
+
+  nativeBabylonBlobUrlCache.set(cacheKey, pending)
+
+  try {
+    return await pending
+  } catch (error) {
+    nativeBabylonBlobUrlCache.delete(cacheKey)
+    throw error
+  }
 }
 
 function getWebFallbackBaseUrl(): string {
@@ -96,12 +188,12 @@ export function getCharacterModelUrl(modelIndex: number): string {
     }
     if (!u) {
       const first = Object.values(m.characterByModelIndex)[0]
-      if (first) return first
+      if (first) return resolveNativeManifestUrl(first)
       throw new Error(
         `[nativeAssets] Native manifest missing character index ${modelIndex}`,
       )
     }
-    return u
+    return resolveNativeManifestUrl(u)
   }
   if (shouldPreferPackagedFileAssets()) {
     return `${getWebFallbackBaseUrl()}characters/${fn}`
@@ -116,7 +208,7 @@ export function getCharacterModelUrl(modelIndex: number): string {
 export function getGroundRootUrl(): string {
   assertNativeOrBrowser()
   if (hasNativeAssetManifest()) {
-    return window.__DLP3D_NATIVE_ASSETS__!.groundBaseUrl
+    return resolveNativeManifestUrl(window.__DLP3D_NATIVE_ASSETS__!.groundBaseUrl)
   }
   if (shouldPreferPackagedFileAssets()) {
     return `${getWebFallbackBaseUrl()}models/ground/`
@@ -131,7 +223,7 @@ export function getGroundRootUrl(): string {
 export function getHdrRootUrl(): string {
   assertNativeOrBrowser()
   if (hasNativeAssetManifest()) {
-    return window.__DLP3D_NATIVE_ASSETS__!.hdrBaseUrl
+    return resolveNativeManifestUrl(window.__DLP3D_NATIVE_ASSETS__!.hdrBaseUrl)
   }
   if (shouldPreferPackagedFileAssets()) {
     return `${getWebFallbackBaseUrl()}img/hdr/`

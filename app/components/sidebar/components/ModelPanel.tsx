@@ -11,6 +11,7 @@ import { fetchUpdateAvatar } from '@/request/api'
 import { useErrorNotification } from '@/hooks/useGlobalNotification'
 import { useTranslation } from 'react-i18next'
 import GlobalTooltip from '@/components/common/GlobalTooltip'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 
 /**
  * ModelPanel component.
@@ -65,7 +66,7 @@ export default function ModelPanel() {
             style={{ position: 'relative' }}
           >
             <img
-              src={character.preview}
+              src={resolvePublicUrl(character.preview)}
               alt={character.name}
               style={{ width: '100%', height: '100%', objectFit: 'contain' }}
             />

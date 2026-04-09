@@ -1,5 +1,6 @@
 import type { NativeToWebViewEvent, WebViewToNativeEvent } from './types';
 import type { WebView } from 'react-native-webview';
+import { pushDebugLog } from '@/store/debugLogStore';
 
 type EventHandler<T = unknown> = (payload: T) => void;
 
@@ -43,6 +44,7 @@ class WebViewBridge {
    * Send event from RN → WebView
    */
   send(event: NativeToWebViewEvent) {
+    pushDebugLog('rn', `→ ${event.type} ${JSON.stringify(event.payload).slice(0, 80)}`);
     if (!this.ref) {
       this.pendingOutbound.push(event);
       return;

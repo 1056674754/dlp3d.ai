@@ -25,6 +25,7 @@ import {
 import { getUserInfo } from '@/features/auth/authStore'
 import { useSelector, useDispatch } from 'react-redux'
 import GlobalTooltip from '@/components/common/GlobalTooltip'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 
 /**
  * ChatListDrawer
@@ -234,6 +235,8 @@ export default function ChatListDrawer() {
             item.name.toLowerCase() === scene_name.toLowerCase(),
         )?.image
       : HDRI_SCENES[5].image
+    const avatarUrl = resolvePublicUrl(avatarPreview ?? CHARACTER_MODELS[0].preview)
+    const sceneUrl = resolvePublicUrl(scenePreview ?? HDRI_SCENES[5].image)
     return (
       <div
         style={{
@@ -242,12 +245,12 @@ export default function ChatListDrawer() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundImage: `url(${scenePreview})`,
+          backgroundImage: `url(${sceneUrl})`,
           backgroundSize: '100%',
         }}
       >
         <img
-          src={avatarPreview}
+          src={avatarUrl}
           alt={avatar}
           style={{
             width: '100%',

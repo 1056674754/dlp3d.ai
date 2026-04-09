@@ -35,6 +35,7 @@ export class GlobalState {
   stateMachine: StateMachine | null = null
 
   private _isUserStreaming: boolean = false
+  private _micLevel: number = 0
 
   // PCM queue management methods (will be set by BabylonJSContext)
   flushPCMQueue: (() => Promise<void>) | null = null
@@ -48,6 +49,7 @@ export class GlobalState {
     new BABYLON.Observable<ArrayBuffer>()
   public readonly onUserStreamingStateChangedObservable =
     new BABYLON.Observable<boolean>()
+  public readonly onMicLevelChangedObservable = new BABYLON.Observable<number>()
 
   // Getter for isUserRecording
   get isUserStreaming(): boolean {
@@ -69,6 +71,21 @@ export class GlobalState {
    */
   public updateUserStreamingState(isStreaming: boolean) {
     this.isUserStreaming = isStreaming
+  }
+
+  get micLevel(): number {
+    return this._micLevel
+  }
+
+  set micLevel(value: number) {
+    if (this._micLevel !== value) {
+      this._micLevel = value
+      this.onMicLevelChangedObservable.notifyObservers(value)
+    }
+  }
+
+  public updateMicLevel(level: number) {
+    this.micLevel = level
   }
 
   // Getter for webSocketState that ensures it's initialized

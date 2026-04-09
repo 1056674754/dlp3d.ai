@@ -3,10 +3,23 @@
  */
 
 /**
- * Check if the web app is running inside a React Native WebView.
+ * Check if the web app is running inside a React Native WebView (or the same
+ * offline APK bundle in WebView).
+ *
+ * Must stay consistent with static export prerender: for `NEXT_PUBLIC_OFFLINE_WEBVIEW=1`
+ * builds, Node has no `window` but we still prerender as embedded — align with
+ * `layout` inline `__DLP3D_EMBEDDED_IN_RN__` / runtime `ReactNativeWebView`, otherwise
+ * React hydration error #418 (HTML mismatch).
  */
 export function isNativeApp(): boolean {
-  return typeof window !== 'undefined' && !!(window as any).ReactNativeWebView
+  if (typeof window === 'undefined') {
+    return process.env.NEXT_PUBLIC_OFFLINE_WEBVIEW === '1'
+  }
+  const w = window as unknown as { __DLP3D_EMBEDDED_IN_RN__?: boolean }
+  if (w.__DLP3D_EMBEDDED_IN_RN__) {
+    return true
+  }
+  return !!(window as any).ReactNativeWebView
 }
 
 /**

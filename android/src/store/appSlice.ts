@@ -16,6 +16,7 @@ export interface AppState {
   language: 'en' | 'zh';
   theme: 'light' | 'dark';
   isWebViewReady: boolean;
+  debugMode: boolean;
 }
 
 const initialState: AppState = {
@@ -25,6 +26,7 @@ const initialState: AppState = {
   language: 'en',
   theme: 'dark',
   isWebViewReady: false,
+  debugMode: false,
 };
 
 export const appSlice = createSlice({
@@ -49,6 +51,9 @@ export const appSlice = createSlice({
     setIsWebViewReady: (state, { payload }: PayloadAction<boolean>) => {
       state.isWebViewReady = payload;
     },
+    setDebugMode: (state, { payload }: PayloadAction<boolean>) => {
+      state.debugMode = payload;
+    },
   },
   extraReducers: builder => {
     /** 旧版持久化里没有新字段时合并 initialState，避免 characterAssetsBaseUrl 等为 undefined */
@@ -69,6 +74,7 @@ export const appSlice = createSlice({
     getLanguage: state => state.language,
     getTheme: state => state.theme,
     getIsWebViewReady: state => state.isWebViewReady,
+    getDebugMode: state => state.debugMode,
   },
 });
 
@@ -79,6 +85,7 @@ export const {
   setLanguage,
   setTheme,
   setIsWebViewReady,
+  setDebugMode,
 } = appSlice.actions;
 export const {
   getServerUrl,
@@ -87,4 +94,5 @@ export const {
   getLanguage,
   getTheme,
   getIsWebViewReady,
+  getDebugMode,
 } = appSlice.selectors;

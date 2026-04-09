@@ -57,6 +57,7 @@ const HEAD_PROBE_MS = 8000;
 const DOWNLOAD_CONNECT_MS = 15000;
 const DOWNLOAD_READ_MS = 180000;
 const PACKAGED_WEB_ASSET_ROOT = 'web';
+const APK_ASSET_WEB_ROOT = 'file:///android_asset/web';
 
 export type NativeAssetManifest = {
   characterByModelIndex: Record<string, string>;
@@ -331,7 +332,11 @@ async function resolveFallbackCharacterFileUrl(
 ): Promise<string> {
   const preferredOrder = [1, 0, 2, 3, 4, 5];
   for (const i of preferredOrder) {
-    const p = `${destRoot}/characters/${CHARACTER_FILENAMES[i]}`;
+    const rel = `characters/${CHARACTER_FILENAMES[i]}`;
+    if (await packagedAssetExists(rel)) {
+      return `${APK_ASSET_WEB_ROOT}/${rel}`;
+    }
+    const p = `${destRoot}/${rel}`;
     if (await fileExistsNonEmpty(p)) {
       return pathToFileUrl(p);
     }
@@ -341,18 +346,55 @@ async function resolveFallbackCharacterFileUrl(
   );
 }
 
+/**
+ * Check if a file exists in the APK's bundled web assets.
+ * WebView can only access file:///android_asset/ paths via XHR,
+ * NOT file:///data/user/0/... (app private dir). So APK assets are preferred.
+ */
+async function packagedAssetExists(rel: string): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  try {
+    return await RNFS.existsAssets(`${PACKAGED_WEB_ASSET_ROOT}/${rel}`);
+  } catch {
+    return false;
+  }
+}
+
+async function packagedGroundBaseAvailable(): Promise<boolean> {
+  return packagedAssetExists('models/ground/hdr-black.glb');
+}
+
+async function packagedHdrBaseAvailable(): Promise<boolean> {
+  return packagedAssetExists('img/hdr/hdr-vast.jpg');
+}
+
 async function buildManifest(destRoot: string): Promise<NativeAssetManifest> {
-  const groundBaseUrl = pathToFileUrl(`${destRoot}/models/ground/`);
-  const hdrBaseUrl = pathToFileUrl(`${destRoot}/img/hdr/`);
-  const fallbackUrl = await resolveFallbackCharacterFileUrl(destRoot);
+  const groundBaseUrl = (await packagedGroundBaseAvailable())
+    ? `${APK_ASSET_WEB_ROOT}/models/ground/`
+    : pathToFileUrl(`${destRoot}/models/ground/`);
+  const hdrBaseUrl = (await packagedHdrBaseAvailable())
+    ? `${APK_ASSET_WEB_ROOT}/img/hdr/`
+    : pathToFileUrl(`${destRoot}/img/hdr/`);
+
+  let fallbackUrl: string | null = null;
 
   const characterByModelIndex: Record<string, string> = {};
   for (let index = 0; index < CHARACTER_FILENAMES.length; index++) {
-    const p = `${destRoot}/characters/${CHARACTER_FILENAMES[index]}`;
-    if (await fileExistsNonEmpty(p)) {
-      characterByModelIndex[String(index)] = pathToFileUrl(p);
+    const fn = CHARACTER_FILENAMES[index];
+    const rel = `characters/${fn}`;
+
+    if (await packagedAssetExists(rel)) {
+      characterByModelIndex[String(index)] = `${APK_ASSET_WEB_ROOT}/${rel}`;
     } else {
-      characterByModelIndex[String(index)] = fallbackUrl;
+      const p = `${destRoot}/${rel}`;
+      if (await fileExistsNonEmpty(p)) {
+        characterByModelIndex[String(index)] = pathToFileUrl(p);
+      } else {
+        if (!fallbackUrl) {
+          fallbackUrl = await resolveFallbackCharacterFileUrl(destRoot);
+        }
+        characterByModelIndex[String(index)] = fallbackUrl;
+      }
     }
   }
 

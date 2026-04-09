@@ -1,5 +1,5 @@
 import * as BABYLON from '@babylonjs/core'
-import { getGroundRootUrl } from '@/utils/nativeAssets'
+import { getGroundRootUrl, resolveBabylonAssetUrl } from '@/utils/nativeAssets'
 
 /**
  * Load a ground model (GLB) and return its meshes, grouped under a parent mesh.
@@ -27,47 +27,60 @@ export function loadGroundMesh(
   receiveShadows: boolean = true,
 ) {
   return new Promise<BABYLON.AbstractMesh[]>((resolve, reject) => {
-    BABYLON.SceneLoader.ImportMesh(
-      '',
-      rootUrl,
-      filename,
-      scene,
-      meshes => {
-        const parentMesh = new BABYLON.Mesh('groundParent', scene)
-        // Add ground tag to the parent mesh
-        BABYLON.Tags.AddTagsTo(parentMesh, 'ground')
+    void resolveBabylonAssetUrl(`${rootUrl}${filename}`, 'model/gltf-binary')
+      .then(loadableAssetUrl => {
+        const isBlobUrl = loadableAssetUrl.startsWith('blob:')
+        const slash = loadableAssetUrl.lastIndexOf('/')
+        const resolvedRootUrl = isBlobUrl ? '' : loadableAssetUrl.slice(0, slash + 1)
+        const resolvedFilename = isBlobUrl
+          ? loadableAssetUrl
+          : loadableAssetUrl.slice(slash + 1)
 
-        meshes.forEach(mesh => {
-          mesh.parent = parentMesh
-          mesh.metadata = { parentMesh: parentMesh }
-          mesh.isPickable = false // Ground is not pickable
+        BABYLON.SceneLoader.ImportMesh(
+          '',
+          resolvedRootUrl,
+          resolvedFilename,
+          scene,
+          meshes => {
+            const parentMesh = new BABYLON.Mesh('groundParent', scene)
+            // Add ground tag to the parent mesh
+            BABYLON.Tags.AddTagsTo(parentMesh, 'ground')
 
-          // Add ground tag to each child mesh
-          BABYLON.Tags.AddTagsTo(mesh, 'ground')
+            meshes.forEach(mesh => {
+              mesh.parent = parentMesh
+              mesh.metadata = { parentMesh: parentMesh }
+              mesh.isPickable = false // Ground is not pickable
 
-          // Configure shadow receiving
-          if (receiveShadows) {
-            mesh.receiveShadows = true
-          }
-        })
+              // Add ground tag to each child mesh
+              BABYLON.Tags.AddTagsTo(mesh, 'ground')
 
-        parentMesh.rotation = new BABYLON.Vector3(
-          BABYLON.Tools.ToRadians(rotationDegrees.x),
-          BABYLON.Tools.ToRadians(rotationDegrees.y),
-          BABYLON.Tools.ToRadians(rotationDegrees.z),
+              // Configure shadow receiving
+              if (receiveShadows) {
+                mesh.receiveShadows = true
+              }
+            })
+
+            parentMesh.rotation = new BABYLON.Vector3(
+              BABYLON.Tools.ToRadians(rotationDegrees.x),
+              BABYLON.Tools.ToRadians(rotationDegrees.y),
+              BABYLON.Tools.ToRadians(rotationDegrees.z),
+            )
+            parentMesh.scaling = new BABYLON.Vector3(scale.x, scale.y, scale.z)
+            parentMesh.position = translation
+
+            resolve(meshes)
+          },
+          undefined,
+          (_scene, message, _exception) => {
+            void _exception
+            reject(new Error(`Failed to load ground mesh: ${message}`))
+          },
+          '.glb',
         )
-        parentMesh.scaling = new BABYLON.Vector3(scale.x, scale.y, scale.z)
-        parentMesh.position = translation
-
-        resolve(meshes)
-      },
-      undefined,
-      (scene, message, _exception) => {
-        void _exception
-        reject(new Error(`Failed to load ground mesh: ${message}`))
-      },
-      '.glb',
-    )
+      })
+      .catch(error => {
+        reject(error)
+      })
   })
 }
 

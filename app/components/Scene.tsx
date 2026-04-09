@@ -18,6 +18,8 @@ function Scene(): ReactElement {
         width: '100%',
         gridRow: 1,
         gridColumn: 1,
+        outline: 'none',
+        WebkitTapHighlightColor: 'transparent',
       }}
       id="canvas"
     />

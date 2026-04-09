@@ -1,33 +1,6 @@
 import ky from 'ky'
-import type { KyRequest, NormalizedOptions } from 'ky'
+import type { KyInstance, KyRequest, NormalizedOptions } from 'ky'
 import { getEnv } from '@/utils/env'
-
-/**
- * Environment variable for the orchestrator host.
- */
-const NEXT_PUBLIC_ORCHESTRATOR_HOST = getEnv('NEXT_PUBLIC_ORCHESTRATOR_HOST')
-/**
- * Environment variable for the orchestrator port.
- */
-const NEXT_PUBLIC_ORCHESTRATOR_PORT = getEnv('NEXT_PUBLIC_ORCHESTRATOR_PORT')
-/**
- * Environment variable for the orchestrator path prefix.
- */
-const NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX = getEnv(
-  'NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX',
-)
-/**
- * Environment variable for the backend host.
- */
-const NEXT_PUBLIC_BACKEND_HOST = getEnv('NEXT_PUBLIC_BACKEND_HOST')
-/**
- * Environment variable for the backend port.
- */
-const NEXT_PUBLIC_BACKEND_PORT = getEnv('NEXT_PUBLIC_BACKEND_PORT')
-/**
- * Environment variable for the backend path prefix.
- */
-const NEXT_PUBLIC_BACKEND_PATH_PREFIX = getEnv('NEXT_PUBLIC_BACKEND_PATH_PREFIX')
 
 /**
  * Base configuration options for HTTP requests.
@@ -69,33 +42,70 @@ const baseOptions = {
 }
 
 /**
- * Ky instance configured for motion file API requests.
- *
- * Uses the backend host configuration and includes all base options.
+ * Resolve a full prefixUrl at call time (not module-init time), handling
+ * the file:// WebView case where window.location.origin is useless.
  */
-function buildPrefixUrl(host: string, port: string, pathPrefix: string): string {
+function buildRuntimePrefixUrl(kind: 'backend' | 'orchestrator'): string {
+  const host = getEnv(
+    kind === 'orchestrator'
+      ? 'NEXT_PUBLIC_ORCHESTRATOR_HOST'
+      : 'NEXT_PUBLIC_BACKEND_HOST',
+  )
+  const port = getEnv(
+    kind === 'orchestrator'
+      ? 'NEXT_PUBLIC_ORCHESTRATOR_PORT'
+      : 'NEXT_PUBLIC_BACKEND_PORT',
+  )
+  const pathPrefix = getEnv(
+    kind === 'orchestrator'
+      ? 'NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX'
+      : 'NEXT_PUBLIC_BACKEND_PATH_PREFIX',
+  )
   if (!host || host === '__SAME_ORIGIN__') {
+    if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any
+      const origin: string | undefined =
+        kind === 'orchestrator'
+          ? w.__DLP3D_ORCHESTRATOR_ORIGIN__
+          : w.__DLP3D_SERVER_ORIGIN__
+      if (origin) return `${origin}${pathPrefix}`
+    }
     const origin = typeof window !== 'undefined' ? window.location.origin : ''
     return `${origin}${pathPrefix}`
   }
+  if (!port) return `https://${host}${pathPrefix}`
   return `https://${host}:${port}${pathPrefix}`
 }
 
-export const kyMotionFile = ky.create({
-  ...baseOptions,
-  prefixUrl: buildPrefixUrl(
-    NEXT_PUBLIC_BACKEND_HOST,
-    NEXT_PUBLIC_BACKEND_PORT,
-    NEXT_PUBLIC_BACKEND_PATH_PREFIX,
-  ),
+let _kyMotionFile: KyInstance | null = null
+let _kyOrchestrator: KyInstance | null = null
+
+export const kyMotionFile: KyInstance = new Proxy({} as KyInstance, {
+  get(_target, prop) {
+    if (!_kyMotionFile) {
+      _kyMotionFile = ky.create({
+        ...baseOptions,
+        prefixUrl: buildRuntimePrefixUrl('backend'),
+      })
+    }
+    const val = (_kyMotionFile as unknown as Record<string | symbol, unknown>)[prop]
+    return typeof val === 'function' ? val.bind(_kyMotionFile) : val
+  },
 })
 
-export const kyOrchestrator = ky.create({
-  ...baseOptions,
-  prefixUrl: buildPrefixUrl(
-    NEXT_PUBLIC_ORCHESTRATOR_HOST,
-    NEXT_PUBLIC_ORCHESTRATOR_PORT,
-    NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX,
-  ),
-  throwHttpErrors: false,
+export const kyOrchestrator: KyInstance = new Proxy({} as KyInstance, {
+  get(_target, prop) {
+    if (!_kyOrchestrator) {
+      _kyOrchestrator = ky.create({
+        ...baseOptions,
+        prefixUrl: buildRuntimePrefixUrl('orchestrator'),
+        throwHttpErrors: false,
+      })
+    }
+    const val = (_kyOrchestrator as unknown as Record<string | symbol, unknown>)[
+      prop
+    ]
+    return typeof val === 'function' ? val.bind(_kyOrchestrator) : val
+  },
 })

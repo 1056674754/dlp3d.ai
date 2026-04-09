@@ -51,15 +51,52 @@ export class ConfigSync {
     return !envHost || envHost === '__SAME_ORIGIN__'
   }
 
-  private _resolveHost(envHost: string): string {
+  /**
+   * In native WebView (file:// protocol), window.location has no hostname/port.
+   * Fall back to the injected origin globals set by the RN host.
+   */
+  private _getNativeOrigin(
+    kind: 'orchestrator' | 'backend',
+  ): { hostname: string; port: number } | null {
+    if (typeof window === 'undefined') return null
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any
+    const raw: string | undefined =
+      kind === 'orchestrator'
+        ? w.__DLP3D_ORCHESTRATOR_ORIGIN__
+        : w.__DLP3D_SERVER_ORIGIN__
+    if (!raw) return null
+    try {
+      const u = new URL(raw)
+      const defaultPort = u.protocol === 'http:' ? 80 : 443
+      return {
+        hostname: u.hostname,
+        port: u.port ? parseInt(u.port, 10) : defaultPort,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  private _resolveHost(envHost: string, kind: 'orchestrator' | 'backend'): string {
     if (this._isSameOrigin(envHost)) {
+      if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+        return this._getNativeOrigin(kind)?.hostname || ''
+      }
       return typeof window !== 'undefined' ? window.location.hostname : ''
     }
     return envHost
   }
 
-  private _resolvePort(envHost: string, envPort: string): number {
+  private _resolvePort(
+    envHost: string,
+    envPort: string,
+    kind: 'orchestrator' | 'backend',
+  ): number {
     if (this._isSameOrigin(envHost)) {
+      if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+        return this._getNativeOrigin(kind)?.port || 443
+      }
       if (typeof window !== 'undefined' && window.location.port) {
         return parseInt(window.location.port, 10)
       }
@@ -70,20 +107,22 @@ export class ConfigSync {
 
   private _updateFromEnv(): void {
     const orchHost = getEnv('NEXT_PUBLIC_ORCHESTRATOR_HOST')
-    this._config.orchestratorHost = this._resolveHost(orchHost)
+    this._config.orchestratorHost = this._resolveHost(orchHost, 'orchestrator')
     this._config.orchestratorPort = this._resolvePort(
       orchHost,
       getEnv('NEXT_PUBLIC_ORCHESTRATOR_PORT'),
+      'orchestrator',
     )
     this._config.orchestratorPathPrefix = getEnv(
       'NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX',
     )
     this._config.orchestratorTimeout = getEnv('NEXT_PUBLIC_ORCHESTRATOR_TIMEOUT')
     const backendHost = getEnv('NEXT_PUBLIC_BACKEND_HOST')
-    this._config.motionFileHost = this._resolveHost(backendHost)
+    this._config.motionFileHost = this._resolveHost(backendHost, 'backend')
     this._config.motionFilePort = this._resolvePort(
       backendHost,
       getEnv('NEXT_PUBLIC_BACKEND_PORT'),
+      'backend',
     )
     this._config.motionFilePathPrefix = getEnv('NEXT_PUBLIC_BACKEND_PATH_PREFIX')
     this._config.motionFileTimeout = parseInt(
@@ -96,7 +135,9 @@ export class ConfigSync {
     this._config.maxRearExtensionDuration = parseFloat(
       getEnv('NEXT_PUBLIC_MAX_REAR_EXTENSION_DURATION') || '0.0',
     )
-    this._config.language = localStorage.getItem('i18nextLng')
+    if (typeof window !== 'undefined' && window.localStorage) {
+      this._config.language = window.localStorage.getItem('i18nextLng')
+    }
   }
 
   /**

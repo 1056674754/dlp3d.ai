@@ -292,6 +292,11 @@ export default function TTSPanel() {
           await updateUserConfig('openai_api_key', key)
         }
         break
+      case 'qwen_realtime_asr':
+        if (key !== '******') {
+          await updateUserConfig('qwen_api_key', key)
+        }
+        break
       default:
         // Only update if not placeholder
         if (key !== '******') {

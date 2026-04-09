@@ -28,16 +28,28 @@ class StreamedAudioProcessor extends AudioWorkletProcessor {
     const input = inputs[0]
     if (input.length > 0) {
       const floatData = input[0]
+      if (!floatData || floatData.length === 0) {
+        return true
+      }
       const int16Data = new Int16Array(floatData.length)
+      let sumSquares = 0
       for (let i = 0; i < floatData.length; i++) {
         let s = floatData[i]
         s = Math.max(-1, Math.min(1, s)) // Clipping to [-1, 1]
+        sumSquares += s * s
         int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff
       }
+      const rmsLevel = Math.sqrt(sumSquares / floatData.length)
       // The posted data must be an ArrayBuffer
       const buffer = int16Data.buffer
       if (this.port && this.port.postMessage) {
-        this.port.postMessage(buffer, [buffer]) // Use transferable object
+        this.port.postMessage(
+          {
+            buffer,
+            level: rmsLevel,
+          },
+          [buffer],
+        )
       }
     }
     return true

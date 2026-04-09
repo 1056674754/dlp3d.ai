@@ -1,4 +1,11 @@
 export type ProviderCategory = 'tts' | 'llm' | 'asr'
+export type LlmFeature = 'conversation' | 'reaction' | 'memory' | 'classification'
+
+export interface ProviderAdapterOption {
+  adapterId: string
+  label?: string
+  labelZh?: string
+}
 
 export interface MongoKeyField {
   field: string
@@ -15,6 +22,9 @@ export interface ProviderDefinition {
   categories: ProviderCategory[]
   mongoKeys: MongoKeyField[]
   adapterIds: Partial<Record<ProviderCategory, string>>
+  adapterOptions?: Partial<Record<ProviderCategory, ProviderAdapterOption[]>>
+  llmFeatureAdapters?: Partial<Record<LlmFeature, string>>
+  llmFeatureAdapterOptions?: Partial<Record<LlmFeature, ProviderAdapterOption[]>>
   suggestedModels?: Partial<Record<ProviderCategory, string[]>>
   iconPath?: string
 }
@@ -35,6 +45,26 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
       },
     ],
     adapterIds: { llm: 'openai_agent', asr: 'openai_realtime' },
+    llmFeatureAdapters: {
+      conversation: 'openai_agent',
+      reaction: 'openai_reaction',
+      memory: 'openai_memory',
+      classification: 'openai_classification',
+    },
+    llmFeatureAdapterOptions: {
+      conversation: [
+        {
+          adapterId: 'openai_agent',
+          label: 'Text Chat',
+          labelZh: '文本对话',
+        },
+        {
+          adapterId: 'openai_audio_agent',
+          label: 'Realtime Audio',
+          labelZh: '实时语音对话',
+        },
+      ],
+    },
     suggestedModels: {
       llm: [
         'gpt-4o',
@@ -70,6 +100,12 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
       },
     ],
     adapterIds: { llm: 'sensenova', tts: 'sensenova' },
+    llmFeatureAdapters: {
+      conversation: 'sensenova_agent',
+      reaction: 'sensenova_reaction',
+      memory: 'sensenova_memory',
+      classification: 'sensenova_classification',
+    },
     iconPath: '/img/llm/sensenova.png',
   },
   sensechat: {
@@ -94,6 +130,12 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
       },
     ],
     adapterIds: { llm: 'sensechat' },
+    llmFeatureAdapters: {
+      conversation: 'sensechat_agent',
+      reaction: 'sensechat_reaction',
+      memory: 'sensechat_memory',
+      classification: 'sensechat_classification',
+    },
     iconPath: '/img/llm/sensenova.png',
   },
   sensenovaomni: {
@@ -118,6 +160,12 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
       },
     ],
     adapterIds: { llm: 'sensenovaomni' },
+    llmFeatureAdapters: {
+      conversation: 'sensenovaomni_agent',
+      reaction: 'sensenovaomni_reaction',
+      memory: 'sensenovaomni_memory',
+      classification: 'sensenovaomni_classification',
+    },
     iconPath: '/img/llm/sensenova.png',
   },
   volcengine: {
@@ -138,6 +186,13 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
         label: 'Access Token',
         labelZh: '访问令牌',
         required: true,
+        secret: true,
+      },
+      {
+        field: 'huoshan_secret_key',
+        label: 'Secret Key (Optional)',
+        labelZh: '密钥（可选）',
+        required: false,
         secret: true,
       },
     ],
@@ -258,6 +313,12 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
       },
     ],
     adapterIds: { llm: 'deepseek' },
+    llmFeatureAdapters: {
+      conversation: 'deepseek_agent',
+      reaction: 'deepseek_reaction',
+      memory: 'deepseek_memory',
+      classification: 'deepseek_classification',
+    },
     suggestedModels: {
       llm: ['deepseek-chat', 'deepseek-reasoner'],
     },
@@ -277,6 +338,12 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
       },
     ],
     adapterIds: { llm: 'xai' },
+    llmFeatureAdapters: {
+      conversation: 'xai_agent',
+      reaction: 'xai_reaction',
+      memory: 'xai_memory',
+      classification: 'xai_classification',
+    },
   },
   anthropic: {
     id: 'anthropic',
@@ -293,6 +360,9 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
       },
     ],
     adapterIds: { llm: 'anthropic' },
+    llmFeatureAdapters: {
+      conversation: 'anthropic_agent',
+    },
     suggestedModels: {
       llm: ['claude-sonnet-4-20250514', 'claude-4-opus-20250514'],
     },
@@ -312,8 +382,95 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
       },
     ],
     adapterIds: { llm: 'gemini' },
+    llmFeatureAdapters: {
+      conversation: 'gemini_agent',
+      reaction: 'gemini_reaction',
+      memory: 'gemini_memory',
+      classification: 'gemini_classification',
+    },
+  },
+  alibaba_bailian: {
+    id: 'alibaba_bailian',
+    label: 'Alibaba Bailian (DashScope)',
+    labelZh: '阿里百炼',
+    categories: ['llm', 'asr'],
+    mongoKeys: [
+      {
+        field: 'qwen_api_key',
+        label: 'API Key',
+        labelZh: 'API 密钥',
+        required: true,
+        secret: true,
+      },
+    ],
+    adapterIds: { llm: 'qwen_agent', asr: 'qwen_realtime_asr' },
+    adapterOptions: {
+      asr: [
+        {
+          adapterId: 'qwen_realtime_asr',
+          label: 'Qwen ASR Realtime',
+          labelZh: 'Qwen 实时语音识别',
+        },
+      ],
+    },
+    llmFeatureAdapters: {
+      conversation: 'qwen_agent',
+      reaction: 'qwen_reaction',
+      memory: 'qwen_memory',
+      classification: 'qwen_classification',
+    },
+    llmFeatureAdapterOptions: {
+      conversation: [
+        {
+          adapterId: 'qwen_agent',
+          label: 'Text Chat',
+          labelZh: '文本对话',
+        },
+        {
+          adapterId: 'qwen_omni_realtime_agent',
+          label: 'Qwen Omni Realtime',
+          labelZh: 'Qwen Omni 实时语音对话',
+        },
+      ],
+    },
+    suggestedModels: {
+      llm: [
+        'qwen-turbo-latest',
+        'qwen-plus',
+        'qwen-max',
+        'qwen-omni-turbo',
+        'qwen3-omni-flash',
+        'qwen3.5-omni-plus-realtime',
+      ],
+      asr: ['qwen-asr-realtime'],
+    },
   },
 } as const
+
+function providerHasCategoryAdapter(
+  provider: ProviderDefinition,
+  category: ProviderCategory,
+  adapterId: string,
+): boolean {
+  return (
+    provider.adapterIds[category] === adapterId ||
+    (provider.adapterOptions?.[category] ?? []).some(
+      option => option.adapterId === adapterId,
+    )
+  )
+}
+
+function providerHasLlmFeatureAdapter(
+  provider: ProviderDefinition,
+  adapterId: string,
+): boolean {
+  return (
+    Object.values(provider.llmFeatureAdapters ?? {}).includes(adapterId) ||
+    Object.values(provider.llmFeatureAdapterOptions ?? {}).some(options =>
+      (options ?? []).some(option => option.adapterId === adapterId),
+    )
+  )
+}
 
 export function getProvidersForCategory(
   category: ProviderCategory,
@@ -371,7 +528,9 @@ export function adapterToProvider(
   category: ProviderCategory,
 ): ProviderDefinition | undefined {
   return Object.values(PROVIDER_REGISTRY).find(
-    p => p.adapterIds[category] === adapterId,
+    p =>
+      providerHasCategoryAdapter(p, category, adapterId) ||
+      (category === 'llm' && providerHasLlmFeatureAdapter(p, adapterId)),
   )
 }
 
@@ -384,9 +543,16 @@ export function getConfiguredAdapters(
   const result: { adapterId: string; provider: ProviderDefinition }[] = []
   for (const pid of configured) {
     const p = PROVIDER_REGISTRY[pid]
-    const aid = p?.adapterIds[category]
-    if (aid) {
-      result.push({ adapterId: aid, provider: p })
+    const options = p?.adapterOptions?.[category]
+    if (options && options.length > 0) {
+      for (const option of options) {
+        result.push({ adapterId: option.adapterId, provider: p })
+      }
+      continue
+    }
+    const adapterId = p?.adapterIds[category]
+    if (adapterId) {
+      result.push({ adapterId, provider: p })
     }
   }
   return result

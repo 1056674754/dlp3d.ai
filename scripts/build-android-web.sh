@@ -15,7 +15,11 @@ echo "Building Next.js static export..."
 cd "$PROJECT_ROOT"
 # Avoid blocking first paint on Google Fonts / Inspector in offline WebView (APK).
 export NEXT_PUBLIC_OFFLINE_WEBVIEW=1
-npm run build
+if [ "${DLP_SKIP_LINT:-0}" = "1" ]; then
+  npm run build -- --no-lint
+else
+  npm run build
+fi
 
 # 2. Verify output exists
 if [ ! -d "$PROJECT_ROOT/out" ]; then
@@ -30,6 +34,18 @@ mkdir -p "$WEB_DIR"
 
 echo "Copying static export to Android assets..."
 cp -r "$PROJECT_ROOT/out/"* "$WEB_DIR/"
+
+HAVOK_WASM_SRC="$PROJECT_ROOT/node_modules/@babylonjs/havok/lib/esm/HavokPhysics.wasm"
+HAVOK_WASM_DST_DIR="$WEB_DIR/scripts"
+HAVOK_WASM_DST="$HAVOK_WASM_DST_DIR/HavokPhysics.wasm"
+
+if [ ! -f "$HAVOK_WASM_SRC" ]; then
+  echo "ERROR: Havok wasm not found at $HAVOK_WASM_SRC" >&2
+  exit 1
+fi
+
+mkdir -p "$HAVOK_WASM_DST_DIR"
+cp "$HAVOK_WASM_SRC" "$HAVOK_WASM_DST"
 
 # Android WebView 在 file:///android_asset 下访问 `/_next` / `_next` 目录不稳定；
 # 将其改名为普通目录并重写导出文件内的引用，避免子资源 404。

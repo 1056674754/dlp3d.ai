@@ -4,6 +4,7 @@
 export default function EmptyStub() {
   return null
 }
+// Covers `app/api` dynamic segments: `[id]`, `[providerId]`, etc. (offline export stubs).
 export async function generateStaticParams() {
-  return [{ id: '_' }]
+  return [{ id: '_', providerId: '_' }]
 }

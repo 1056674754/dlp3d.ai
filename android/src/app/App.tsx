@@ -1,4 +1,5 @@
 import '@/theme/fontScaling';
+import '@/i18n/config';
 import React, { useEffect, useState } from 'react';
 import { enableScreens } from 'react-native-screens';
 import { NavigationContainer } from '@react-navigation/native';
@@ -10,25 +11,49 @@ import { NavigationContainer } from '@react-navigation/native';
 enableScreens(false);
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useTheme, PaperProvider, IconButton } from 'react-native-paper';
-import { Provider as ReduxProvider, useSelector } from 'react-redux';
+import { useTheme, PaperProvider } from 'react-native-paper';
+import {
+  Provider as ReduxProvider,
+  useSelector,
+  useDispatch,
+} from 'react-redux';
 import { persistStore } from 'redux-persist';
 import { PersistGate } from 'redux-persist/integration/react';
 import { configureStore } from '@reduxjs/toolkit';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { StatusBar } from 'react-native';
+import {
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
+import { StatusBar, Platform } from 'react-native';
 import { persistedReducer } from '@/store';
+import type { RootState } from '@/store';
 import { darkTheme, lightTheme } from '@/theme/theme';
 import { AuthScreen } from '@/screens/auth/AuthScreen';
 import HomeScreen from '@/screens/home/HomeScreen';
 import ChatListScreen from '@/screens/chat/ChatListScreen';
 import { useWebViewChatSync } from '@/hooks/useWebViewChatSync';
 import { useAndroidRuntimePermissions } from '@/hooks/useAndroidRuntimePermissions';
-import { SettingsScreen } from '@/screens/settings/SettingsScreen';
-import { useDispatch } from 'react-redux';
-import type { RootState } from '@/store';
+import { AppSettingsScreen } from '@/screens/settings/AppSettingsScreen';
+import { SettingsScreen as CharacterSettingsScreen } from '@/screens/settings/SettingsScreen';
 import { setIsLogin } from '@/store/authSlice';
+import DebugOverlay from '@/components/DebugOverlay';
+import { pushDebugLog } from '@/store/debugLogStore';
 import { SplashScreen } from '@/screens/splash/SplashScreen';
+import { useTranslation } from 'react-i18next';
+import i18n from '@/i18n/config';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+
+type RootStackParamList = {
+  Auth: undefined;
+  MainTabs: undefined;
+  CharacterSettings: undefined;
+};
+
+type MainTabParamList = {
+  Home: undefined;
+  ChatList: undefined;
+  Settings: undefined;
+};
 
 export const store = configureStore({
   reducer: persistedReducer,
@@ -38,30 +63,48 @@ export const store = configureStore({
 
 export const persistor = persistStore(store);
 
-const Stack = createNativeStackNavigator();
-const Tab = createBottomTabNavigator();
+const Stack = createNativeStackNavigator<RootStackParamList>();
+const Tab = createBottomTabNavigator<MainTabParamList>();
 
 /** Minimum splash time after rehydration (Phase 7). */
 const SPLASH_MIN_MS = 1400;
 
 function MainTabNavigator() {
   const theme = useTheme();
+  const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
   useWebViewChatSync();
   useAndroidRuntimePermissions();
+  const androidBottomInset =
+    Platform.OS === 'android' ? Math.max(insets.bottom, 12) : insets.bottom;
 
   return (
     <Tab.Navigator
       screenOptions={{
         headerStyle: { backgroundColor: theme.colors.background },
         headerTintColor: theme.colors.onSurface,
+        headerTitleAllowFontScaling: false,
         headerTitleStyle: { fontSize: 17, fontWeight: '600' },
         /** Ensures tab scenes get bounded height so inner ScrollViews can scroll (Android). */
         sceneStyle: { flex: 1 },
         tabBarStyle: {
           backgroundColor: theme.colors.background,
           borderTopColor: theme.colors.outline + '40',
+          height: 46 + androidBottomInset,
+          paddingTop: 2,
+          paddingBottom: Math.max(androidBottomInset - 6, 6),
         },
-        tabBarLabelStyle: { fontSize: 11 },
+        tabBarItemStyle: {
+          paddingTop: 0,
+        },
+        tabBarLabelStyle: {
+          fontSize: 11,
+          marginBottom: Platform.OS === 'android' ? 1 : 0,
+        },
+        tabBarIconStyle: {
+          marginTop: 0,
+        },
+        tabBarAllowFontScaling: false,
         tabBarActiveTintColor: theme.colors.primary,
         tabBarInactiveTintColor: theme.colors.onSurface + '60',
       }}
@@ -70,10 +113,15 @@ function MainTabNavigator() {
         name="Home"
         component={HomeScreen}
         options={{
-          title: 'DLP3D',
-          tabBarLabel: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <IconButton icon="home" iconColor={color} size={size} />
+          title: t('navigation.homeTitle'),
+          headerShown: Platform.OS !== 'android',
+          tabBarLabel: t('common.home'),
+          tabBarIcon: ({ color, size, focused }) => (
+            <MaterialCommunityIcons
+              name={focused ? 'home' : 'home-outline'}
+              color={color}
+              size={Math.max(18, size - 3)}
+            />
           ),
         }}
       />
@@ -81,21 +129,29 @@ function MainTabNavigator() {
         name="ChatList"
         component={ChatListScreen}
         options={{
-          title: 'Conversations',
-          tabBarLabel: 'Chats',
-          tabBarIcon: ({ color, size }) => (
-            <IconButton icon="chat" iconColor={color} size={size} />
+          title: t('navigation.conversationsTitle'),
+          tabBarLabel: t('common.chats'),
+          tabBarIcon: ({ color, size, focused }) => (
+            <MaterialCommunityIcons
+              name={focused ? 'chat' : 'chat-outline'}
+              color={color}
+              size={Math.max(18, size - 3)}
+            />
           ),
         }}
       />
       <Tab.Screen
         name="Settings"
-        component={SettingsScreen}
+        component={AppSettingsScreen}
         options={{
-          title: 'Settings',
-          tabBarLabel: 'Settings',
-          tabBarIcon: ({ color, size }) => (
-            <IconButton icon="cog" iconColor={color} size={size} />
+          title: t('navigation.settingsTitle'),
+          tabBarLabel: t('common.settings'),
+          tabBarIcon: ({ color, size, focused }) => (
+            <MaterialCommunityIcons
+              name={focused ? 'cog' : 'cog-outline'}
+              color={color}
+              size={Math.max(18, size - 3)}
+            />
           ),
         }}
       />
@@ -105,6 +161,7 @@ function MainTabNavigator() {
 
 function AppNavigator() {
   const theme = useTheme();
+  const { t } = useTranslation();
   const isLogin = useSelector((state: RootState) => state.auth.isLogin);
   const dispatch = useDispatch();
 
@@ -131,7 +188,21 @@ function AppNavigator() {
             )}
           </Stack.Screen>
         ) : (
-          <Stack.Screen name="MainTabs" component={MainTabNavigator} />
+          <>
+            <Stack.Screen name="MainTabs" component={MainTabNavigator} />
+            <Stack.Screen
+              name="CharacterSettings"
+              component={CharacterSettingsScreen}
+              options={{
+                headerShown: true,
+                title: t('navigation.characterSettingsTitle'),
+                headerStyle: { backgroundColor: theme.colors.background },
+                headerTintColor: theme.colors.onSurface,
+                headerTitleAllowFontScaling: false,
+                headerTitleStyle: { fontSize: 17, fontWeight: '600' },
+              }}
+            />
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>
@@ -141,8 +212,17 @@ function AppNavigator() {
 /** Paper + StatusBar follow Redux `app.theme` (Phase 7 dark mode). */
 function ThemedApp() {
   const themeMode = useSelector((state: RootState) => state.app.theme);
+  const language = useSelector((state: RootState) => state.app.language);
   const paperTheme = themeMode === 'dark' ? darkTheme : lightTheme;
   const barStyle = themeMode === 'dark' ? 'light-content' : 'dark-content';
+
+  useEffect(() => {
+    pushDebugLog('rn', 'App mounted, theme=' + themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    void i18n.changeLanguage(language);
+  }, [language]);
 
   return (
     <PaperProvider theme={paperTheme}>
@@ -152,6 +232,7 @@ function ThemedApp() {
       />
       <SafeAreaProvider>
         <AppNavigator />
+        <DebugOverlay />
       </SafeAreaProvider>
     </PaperProvider>
   );

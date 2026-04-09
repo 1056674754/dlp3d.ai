@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next'
 import LanguageSwitcher from './LanguageSwitch'
 import { shouldHideWebAuthChrome } from '@/utils/nativeBridge'
 import './Navigation.scss'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 /*
   Top navigation component for the application.
 
@@ -235,7 +236,7 @@ export default function Navigation() {
                   )
                 ) : (
                   <Image
-                    src="/img/account-icon.png"
+                    src={resolvePublicUrl('/img/account-icon.png')}
                     alt="Account"
                     width={20}
                     height={20}

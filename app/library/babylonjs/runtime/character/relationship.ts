@@ -4,6 +4,7 @@ export interface Relationship {
 }
 
 export enum RelationshipStage {
+  Disliked = 'Disliked',
   Stranger = 'Stranger',
   Acquaintance = 'Acquaintance',
   Friend = 'Friend',

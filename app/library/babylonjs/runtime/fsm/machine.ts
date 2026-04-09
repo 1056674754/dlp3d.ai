@@ -1,6 +1,7 @@
 /* eslint-disable no-case-declarations */
 import * as BABYLON from '@babylonjs/core'
 import * as BABYLON_GUI from '@babylonjs/gui'
+import { PhotoDome } from '@babylonjs/core/Helpers/photoDome'
 import Queue from 'yocto-queue'
 import { States, stateToEnglishName } from './states'
 import { ConditionedMessage, Conditions } from './conditions'
@@ -32,14 +33,24 @@ import {
   RuntimeAnimationEvent,
   RuntimeConditionedMessage,
 } from '@/library/babylonjs/runtime'
-import { SceneConfig, HDRI_SCENES } from '@/library/babylonjs/config/scene'
+import {
+  SceneConfig,
+  HDRI_SCENES,
+  SKYBOX_ENVIRONMENT_INTENSITY,
+  SKYBOX_Y_ROTATION_DEGREES,
+  getAndroidRuntimeSkyboxBlur,
+} from '@/library/babylonjs/config/scene'
 import { LoadingProgressManager } from '@/utils/progressManager'
 import {
   Character,
   EyeTrackingController,
 } from '@/library/babylonjs/runtime/character'
 import { loadGroundMesh, loadGroundMeshWithPreset } from '@/library/babylonjs/utils'
-import { getGroundRootUrl, resolveHdriUrl } from '@/utils/nativeAssets'
+import {
+  getGroundRootUrl,
+  resolveBabylonAssetUrl,
+  resolveHdriUrl,
+} from '@/utils/nativeAssets'
 import { PhysicsViewer } from '@babylonjs/core/Debug/physicsViewer'
 import {
   getRelationship,
@@ -136,6 +147,14 @@ export class StateMachine {
    * Sleep time between state machine iterations in seconds.
    */
   private _sleepTimeInSeconds: number = 0.1
+  /**
+   * Timestamp when the current actor response wait cycle started.
+   */
+  private _actorRespondWaitStartedAtInMilliSeconds: number | null = null
+  /**
+   * Whether the current actor response wait cycle has entered stream-readiness phase.
+   */
+  private _actorRespondWaitingForStreamReady: boolean = false
 
   /**
    * Bound dispose function for cleanup.
@@ -433,17 +452,74 @@ export class StateMachine {
       }
     }
 
-    const loadHDREnvironment = (hdriFileName: string) => {
+    const loadHDREnvironment = async (hdriFileName: string) => {
       try {
-        const hdrTexture = new BABYLON.EquiRectangularCubeTexture(
+        const isAndroidEmbedded =
+          typeof window !== 'undefined' &&
+          (window as Window & { __DLP3D_EMBEDDED_IN_RN__?: boolean })
+            .__DLP3D_EMBEDDED_IN_RN__ === true &&
+          /Android/i.test(navigator.userAgent)
+        const isAndroidPackagedWebView =
+          isAndroidEmbedded &&
+          typeof window !== 'undefined' &&
+          window.location.protocol === 'file:' &&
+          window.location.pathname.startsWith('/android_asset/web/')
+        if (isAndroidPackagedWebView) {
+          this._globalState.scene.getMeshByName('skyBox')?.dispose()
+          this._globalState.scene.getNodeByName('androidSkyDome')?.dispose()
+          const hdrUrl = await resolveBabylonAssetUrl(
+            resolveHdriUrl(hdriFileName),
+            'image/jpeg',
+            'dataUrl',
+          )
+          new PhotoDome(
+            'androidSkyDome',
+            hdrUrl,
+            {
+              resolution: 24,
+              size: 1000,
+            },
+            this._globalState.scene,
+          )
+          this._globalState.scene.environmentTexture = null
+          return
+        }
+        const hdrUrl = await resolveBabylonAssetUrl(
           resolveHdriUrl(hdriFileName),
+          'image/jpeg',
+          'dataUrl',
+        )
+        const hdrTexture = new BABYLON.EquiRectangularCubeTexture(
+          hdrUrl,
           this._globalState.scene,
           1024,
+          false,
+          true,
+          undefined,
+          undefined,
+          isAndroidEmbedded,
         )
         this._globalState.scene.environmentTexture = hdrTexture
-        this._globalState.scene.createDefaultSkybox(hdrTexture, true, 1000, 0)
+        this._globalState.scene.environmentIntensity = SKYBOX_ENVIRONMENT_INTENSITY
+        const skyboxBlur = isAndroidEmbedded
+          ? getAndroidRuntimeSkyboxBlur(hdriFileName)
+          : 0
+        const skybox = this._globalState.scene.createDefaultSkybox(
+          hdrTexture,
+          true,
+          1000,
+          skyboxBlur,
+        )
+        if (skybox && isAndroidEmbedded) {
+          skybox.rotate(
+            BABYLON.Axis.Y,
+            BABYLON.Tools.ToRadians(SKYBOX_Y_ROTATION_DEGREES),
+          )
+        }
 
-        Logger.log(`HDRi environment loaded: ${hdriFileName}`)
+        Logger.log(
+          `HDRi environment loaded: ${hdriFileName} (supersample=${isAndroidEmbedded}, environmentIntensity=${this._globalState.scene.environmentIntensity}, skyboxBlur=${skyboxBlur})`,
+        )
       } catch (error) {
         Logger.error(i18n.t('fsm.hdrLoadingError', { ns: 'client' }) + ': ' + error)
       }
@@ -1073,9 +1149,9 @@ export class StateMachine {
       }
       const language = await this._configSync.getItem('language')
       if (language === 'zh') {
-        await this._uploadUserTextStreaming('用户已进入对话')
+        await this._uploadActorText('用户已进入对话')
       } else if (language === 'en') {
-        await this._uploadUserTextStreaming('The user has entered the chat')
+        await this._uploadActorText('The user has entered the chat')
       } else {
         Logger.error(
           i18n.t('fsm.unsupportedLanguage', { ns: 'client' }) + ': ' + language,
@@ -1123,8 +1199,14 @@ export class StateMachine {
         await new Promise(resolve => setTimeout(resolve, sleepTimeInSeconds * 1000))
         cnt += 1
         if (cnt > retryTimes) {
+          Logger.error(
+            'Stream readiness snapshot before exit: ' +
+              JSON.stringify(
+                this._orchestratorStreamingClient.getReadinessSnapshot(),
+              ),
+          )
           Logger.error(i18n.t('fsm.waitForDataStreamReadyTimeout', { ns: 'client' }))
-          await this._switchState(States.EXIT)
+          await this._handleAlgorithmGenerationFailure()
           return
         }
         continue
@@ -1139,19 +1221,19 @@ export class StateMachine {
       } catch (error) {
         if (error instanceof StreamUnavailableError) {
           Logger.error(i18n.t('fsm.dataStreamActuallyUnavailable', { ns: 'client' }))
-          await this._switchState(States.EXIT)
+          await this._handleAlgorithmGenerationFailure()
           return
         } else if (error instanceof StreamEndedError) {
           Logger.error(i18n.t('fsm.dataStreamEnded', { ns: 'client' }))
-          await this._switchState(States.EXIT)
+          await this._handleAlgorithmGenerationFailure()
           return
         } else if (error instanceof ConnectionTimeoutError) {
           Logger.error(i18n.t('fsm.dataStreamConnectionTimedOut', { ns: 'client' }))
-          await this._switchState(States.EXIT)
+          await this._handleAlgorithmGenerationFailure()
           return
         } else {
           Logger.error(i18n.t('fsm.unknownError', { ns: 'client' }) + ': ' + error)
-          await this._switchState(States.EXIT)
+          await this._handleAlgorithmGenerationFailure()
           return
         }
       }
@@ -1161,7 +1243,7 @@ export class StateMachine {
             ': ' +
             Object.keys(animationDict),
         )
-        await this._switchState(States.EXIT)
+        await this._handleAlgorithmGenerationFailure()
         return
       }
       this._addOpeningRemarkAnimation(animationDict)
@@ -1315,6 +1397,7 @@ export class StateMachine {
   async waitingForActorRespondGenerationFinished() {
     const message = this._getConditionNoWait()
     if (message !== null && message.condition === Conditions.USER_START_RECORDING) {
+      this._resetActorRespondWaitTimer()
       this._orchestratorStreamingClient?.interrupt()
       this._orchestratorStreamingClient?.dispose()
       this._orchestratorStreamingClient = null
@@ -1327,18 +1410,59 @@ export class StateMachine {
     } else if (message === null) {
       if (this._orchestratorStreamingClient === null) {
         Logger.error(i18n.t('fsm.noRunningStreamingClientFound', { ns: 'client' }))
+        this._resetActorRespondWaitTimer()
         await this._handleAlgorithmGenerationFailure()
+        return
       }
 
+      this._ensureActorRespondWaitTimerStarted()
       const resp_type = await this._orchestratorStreamingClient?.getResponseType()
+      const hasReceivedResponseSignal =
+        this._orchestratorStreamingClient.hasReceivedResponseSignal
+      if (
+        resp_type === null ||
+        resp_type === undefined ||
+        (resp_type === 'normal' && !hasReceivedResponseSignal)
+      ) {
+        if (this._actorRespondWaitTimedOut()) {
+          Logger.error(
+            'Response generation snapshot before timeout: ' +
+              JSON.stringify(
+                this._orchestratorStreamingClient?.getReadinessSnapshot(),
+              ),
+          )
+          Logger.error(
+            i18n.t('fsm.waitForServiceResponseTypeTimeout', { ns: 'client' }),
+          )
+          this._resetActorRespondWaitTimer()
+          await this._handleAlgorithmGenerationFailure()
+        }
+        return
+      }
       switch (resp_type) {
         case 'normal':
+          if (!this._actorRespondWaitingForStreamReady) {
+            this._startActorRespondStreamWaitTimer()
+          }
           const streamReady = await this._orchestratorStreamingClient?.streamReady()
           if (!streamReady) {
-            // Received data is not long enough, wait for next response_type query
+            if (this._actorRespondWaitTimedOut()) {
+              Logger.error(
+                'Stream readiness snapshot before timeout: ' +
+                  JSON.stringify(
+                    this._orchestratorStreamingClient?.getReadinessSnapshot(),
+                  ),
+              )
+              Logger.error(
+                i18n.t('fsm.waitForDataStreamReadyTimeout', { ns: 'client' }),
+              )
+              this._resetActorRespondWaitTimer()
+              await this._handleAlgorithmGenerationFailure()
+            }
             return
           }
 
+          this._resetActorRespondWaitTimer()
           let animationDict: Record<string, any> = {}
           try {
             animationDict = await this._orchestratorStreamingClient!.getAnimation()
@@ -1426,6 +1550,7 @@ export class StateMachine {
           await this._switchState(States.ACTOR_ANIMATION_STREAMING)
           break
         case 'leave':
+          this._resetActorRespondWaitTimer()
           const character = this._globalState.characters[0]
           character.runtimeAnimationGroup.switchJointAnimation(
             'leave',
@@ -1450,12 +1575,11 @@ export class StateMachine {
           await this._switchState(States.WAITING_FOR_ACTOR_LEAVING_FINISHED)
           break
         case 'failed':
+          this._resetActorRespondWaitTimer()
           await this._handleAlgorithmGenerationFailure()
           break
-        case null:
-        case undefined:
-          return
         default:
+          this._resetActorRespondWaitTimer()
           Logger.error(
             i18n.t('fsm.unknown3DACGenerationResultType', { ns: 'client' }) +
               ': ' +
@@ -1476,6 +1600,7 @@ export class StateMachine {
       message !== null &&
       message.condition === Conditions.ANIMATION_FINISHED
     ) {
+      this._resetActorRespondWaitTimer()
       return
     } else {
       if (message !== null) {
@@ -1518,6 +1643,7 @@ export class StateMachine {
       return
     }
     if (message.condition === Conditions.ANIMATION_FINISHED) {
+      this._setRecordAudioButtonEnabled(true)
       await this._switchState(States.IDLE)
     } else {
       this._logUnexpectedCondition(message)
@@ -1750,15 +1876,14 @@ export class StateMachine {
       this._orchestratorStreamingClient.dispose()
     }
 
-    // Import errorBus dynamically to show Home button
     const { errorBus } = await import('@/utils/errorBus')
 
     const payload = {
       message: 'State machine stopped, exit chat.',
       severity: 'neutral' as const,
-      actionText: 'Home',
+      actionText: 'Retry',
       onAction: () => {
-        window.location.href = '/'
+        window.location.reload()
       },
       durationMs: 0,
       closable: false,
@@ -1941,6 +2066,10 @@ export class StateMachine {
   private async _switchState(targetState: States) {
     this._lastStateValue = this._stateValue
     this._stateValue = targetState
+    if (targetState !== States.WAITING_FOR_ACTOR_RESPOND_GENERATION_FINISHED) {
+      this._resetActorRespondWaitTimer()
+    }
+    this.onStateChangedObservable.notifyObservers()
     let lastStateName
     if (this._lastStateValue !== null) {
       lastStateName = stateToEnglishName(this._lastStateValue)
@@ -1987,6 +2116,46 @@ export class StateMachine {
       this._orchestratorStreamingClient.dispose()
     }
     await this._switchState(States.ALGORITHM_GENERATION_FAILED)
+  }
+
+  private _ensureActorRespondWaitTimerStarted() {
+    if (this._actorRespondWaitStartedAtInMilliSeconds === null) {
+      this._actorRespondWaitStartedAtInMilliSeconds = performance.now()
+    }
+  }
+
+  private _resetActorRespondWaitTimer() {
+    this._actorRespondWaitStartedAtInMilliSeconds = null
+    this._actorRespondWaitingForStreamReady = false
+  }
+
+  private _startActorRespondStreamWaitTimer() {
+    this._actorRespondWaitStartedAtInMilliSeconds = performance.now()
+    this._actorRespondWaitingForStreamReady = true
+  }
+
+  private _getActorRespondWaitTimeoutInSeconds(): number {
+    const baseWaitTimeInSeconds =
+      this._orchestratorStreamingClient?.timeOut ??
+      this._assetManagerCfg['orchestratorTimeout'] ??
+      10
+    // Audio chat often needs extra time for ASR, classification, LLM, and TTS
+    // before the first playable stream chunks arrive. Keep this state-specific
+    // timeout more forgiving than the generic orchestrator timeout.
+    return Math.max(baseWaitTimeInSeconds * 3, 30)
+  }
+
+  private _actorRespondWaitTimedOut(): boolean {
+    if (
+      this._actorRespondWaitStartedAtInMilliSeconds === null ||
+      this._orchestratorStreamingClient === null
+    ) {
+      return false
+    }
+    return (
+      performance.now() - this._actorRespondWaitStartedAtInMilliSeconds >
+      this._getActorRespondWaitTimeoutInSeconds() * 1000
+    )
   }
 
   /**
@@ -2074,6 +2243,9 @@ export class StateMachine {
    * Flushes remaining PCM data and sends stop streaming message to server.
    */
   private async _stopUserAudioStreaming() {
+    // Give the worklet a brief window to forward the final PCM frames from the
+    // just-finished utterance before we stop accepting streamed chunks.
+    await new Promise(resolve => setTimeout(resolve, 140))
     this._globalState.updateUserStreamingState(false)
     const message = `User stopped audio streaming`
     Logger.debug(message)

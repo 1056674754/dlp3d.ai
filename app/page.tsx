@@ -18,8 +18,10 @@ import {
   patchWindowOpen,
   shouldHideWebAuthChrome,
 } from '@/utils/nativeBridge'
+import { navigateInPackagedWebview } from '@/utils/packagedWebview'
 
 import ConfigSidebar from './components/sidebar'
+import NativeScenePicker from './components/layout/NativeScenePicker'
 import LeftSidebar from './components/setting'
 import { useSelector, useDispatch } from 'react-redux'
 import {
@@ -342,6 +344,20 @@ export default function Home() {
   }, [isGlobalLoading, isLoading, isSceneLoading, isCharacterLoading])
 
   useEffect(() => {
+    if (!isGlobalLoading) return
+    const SAFETY_TIMEOUT_MS = 30_000
+    const id = setTimeout(() => {
+      console.warn('[page] Safety timeout: force-dismissing loading overlay', {
+        isSceneLoading,
+        isCharacterLoading,
+      })
+      dispatch(setIsSceneLoading(false))
+      dispatch(setIsCharacterLoading(false))
+    }, SAFETY_TIMEOUT_MS)
+    return () => clearTimeout(id)
+  }, [isGlobalLoading, dispatch, isSceneLoading, isCharacterLoading])
+
+  useEffect(() => {
     ;(window as any).babylonViewerRef = babylonViewerRef
     return () => {
       delete (window as any).babylonViewerRef
@@ -350,7 +366,11 @@ export default function Home() {
   useEffect(() => {
     if (isLogin) {
       ;(async () => {
-        await loadUserCharacters()
+        try {
+          await loadUserCharacters()
+        } catch (e) {
+          console.warn('[loadUserCharacters]', e)
+        }
       })()
       setChatAvailable(true)
     }
@@ -451,7 +471,32 @@ export default function Home() {
    * @returns Promise<void> Resolves after the new window is opened or a notice is shown.
    */
   const handleStartConversation = useCallback(async () => {
+    console.error('[handleStartConversation] called', {
+      isCharacterLoading,
+      isSceneLoading,
+      chatAvailable,
+      isNative: isNativeApp(),
+      selectedScene,
+      selectedCharacterId,
+    })
+
     if (isCharacterLoading || isSceneLoading) {
+      console.error('[handleStartConversation] blocked: still loading')
+      return
+    }
+
+    if (!chatAvailable) {
+      console.error('[handleStartConversation] blocked: chatAvailable=false')
+      return
+    }
+
+    // Native WebView: skip secret checks, screenshots, location checks — just navigate
+    if (isNativeApp()) {
+      const url = `/babylon?scene=${selectedScene}${
+        selectedCharacterId ? `&character_id=${selectedCharacterId}` : ''
+      }`
+      console.error('[handleStartConversation] navigating to:', url)
+      navigateInPackagedWebview(url)
       return
     }
 
@@ -467,102 +512,94 @@ export default function Home() {
       return
     }
 
-    if (chatAvailable) {
+    try {
+      const cameraState = babylonViewerRef.current?.getCameraState?.()
+      if (cameraState) {
+        localStorage.setItem('dlp_camera_state', JSON.stringify(cameraState))
+      }
+      if (selectedChat?.scene_name) {
+        const idx = HDRI_SCENES.findIndex(
+          scene => scene.name === selectedChat.scene_name,
+        )
+        localStorage.setItem('dlp_scene_index', idx === -1 ? '3' : String(idx))
+      }
+      const isInMainlandChinaOrHongKong = checkLocation()
+      const enterWrongLocation = localStorage.getItem('dlp_enter_wrong_location')
+      if (
+        !isInMainlandChinaOrHongKong &&
+        !enterWrongLocation &&
+        isSensetimeTAServer
+      ) {
+        setLocationDialogOpen(true)
+        return
+      }
+
       try {
-        const cameraState = babylonViewerRef.current?.getCameraState?.()
-        if (cameraState) {
-          localStorage.setItem('dlp_camera_state', JSON.stringify(cameraState))
+        dispatch(setIsChatStarting(true))
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('chat-starting'))
         }
-        if (selectedChat?.scene_name) {
-          localStorage.setItem(
-            'dlp_scene_index',
-            HDRI_SCENES.findIndex(
-              scene => scene.name === selectedChat.scene_name,
-            ) === -1
-              ? '3'
-              : HDRI_SCENES.findIndex(
-                  scene => scene.name === selectedChat.scene_name,
-                ).toString(),
-          )
+        await new Promise(r => setTimeout(r, 100))
+
+        if (!selectedCharacterId) {
+          await loadUserCharacters()
         }
-        const isInMainlandChinaOrHongKong = checkLocation()
-        const enterWrongLocation = localStorage.getItem('dlp_enter_wrong_location')
+        await new Promise(r => setTimeout(r, 800))
+        const missingSecret = await fetchGetMissingSecret(
+          user!.id,
+          selectedCharacterId!,
+        )
         if (
-          !isInMainlandChinaOrHongKong &&
-          !enterWrongLocation &&
-          isSensetimeTAServer
+          missingSecret.llm_requirements.length > 0 ||
+          missingSecret.tts_requirements.length > 0 ||
+          missingSecret.asr_requirements.length > 0
         ) {
-          setLocationDialogOpen(true)
+          const data = {
+            llm_requirements: missingSecret.llm_requirements.sort(),
+            tts_requirements: missingSecret.tts_requirements.sort(),
+            asr_requirements: missingSecret.asr_requirements.sort(),
+          }
+          setMissingSecret(data)
+          setMissingSecretDialogOpen(true)
           return
         }
 
-        try {
-          dispatch(setIsChatStarting(true))
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new Event('chat-starting'))
-          }
-          await new Promise(r => setTimeout(r, 100))
-
-          if (!selectedCharacterId) {
-            await loadUserCharacters()
-          }
-          await new Promise(r => setTimeout(r, 800))
-          const missingSecret = await fetchGetMissingSecret(
-            user!.id,
-            selectedCharacterId!,
-          )
-          if (
-            missingSecret.llm_requirements.length > 0 ||
-            missingSecret.tts_requirements.length > 0 ||
-            missingSecret.asr_requirements.length > 0
-          ) {
-            const data = {
-              llm_requirements: missingSecret.llm_requirements.sort(),
-              tts_requirements: missingSecret.tts_requirements.sort(),
-              asr_requirements: missingSecret.asr_requirements.sort(),
-            }
-            setMissingSecret(data)
-            setMissingSecretDialogOpen(true)
-            return
-          }
-
-          if (babylonViewerRef.current?.takeScreenshot) {
-            const screenshotData = await captureScreenshot()
-            const sessionId = `chat_${Date.now()}_${Math.random()
-              .toString(36)
-              .substr(2, 9)}`
-            try {
-              await saveScreenshotToStorage(screenshotData, sessionId)
-              localStorage.setItem('dlp_current_session_id', sessionId)
-            } catch (screenshotError) {
-              console.error(
-                'Failed to save screenshot, continuing without it:',
-                screenshotError,
-              )
-              localStorage.setItem('dlp_current_session_id', sessionId)
-            }
-          }
-          const url = `/babylon?scene=${selectedScene}${
-            selectedCharacterId ? `&character_id=${selectedCharacterId}` : ''
-          }`
-          window.open(url, '_blank', 'noopener,noreferrer')
-        } catch (error) {
-          console.error('Screenshot failed:', error)
-          const url = `/babylon?scene=${selectedScene}${
-            selectedCharacterId ? `&character_id=${selectedCharacterId}` : ''
-          }`
-          window.open(url, '_blank', 'noopener,noreferrer')
-        } finally {
-          dispatch(setIsChatStarting(false))
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new Event('chat-screenshot-done'))
+        if (babylonViewerRef.current?.takeScreenshot) {
+          const screenshotData = await captureScreenshot()
+          const sessionId = `chat_${Date.now()}_${Math.random()
+            .toString(36)
+            .substr(2, 9)}`
+          try {
+            await saveScreenshotToStorage(screenshotData, sessionId)
+            localStorage.setItem('dlp_current_session_id', sessionId)
+          } catch (screenshotError) {
+            console.error(
+              'Failed to save screenshot, continuing without it:',
+              screenshotError,
+            )
+            localStorage.setItem('dlp_current_session_id', sessionId)
           }
         }
+        const url = `/babylon?scene=${selectedScene}${
+          selectedCharacterId ? `&character_id=${selectedCharacterId}` : ''
+        }`
+        window.open(url, '_blank', 'noopener,noreferrer')
       } catch (error) {
-        console.error('Failed to open new tab: ', error)
-        const fallbackUrl = `/babylon?scene=${selectedScene}`
-        window.open(fallbackUrl, '_blank', 'noopener,noreferrer')
+        console.error('Screenshot failed:', error)
+        const url = `/babylon?scene=${selectedScene}${
+          selectedCharacterId ? `&character_id=${selectedCharacterId}` : ''
+        }`
+        window.open(url, '_blank', 'noopener,noreferrer')
+      } finally {
+        dispatch(setIsChatStarting(false))
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('chat-screenshot-done'))
+        }
       }
+    } catch (error) {
+      console.error('Failed to open new tab: ', error)
+      const fallbackUrl = `/babylon?scene=${selectedScene}`
+      window.open(fallbackUrl, '_blank', 'noopener,noreferrer')
     }
   }, [
     isCharacterLoading,
@@ -575,6 +612,7 @@ export default function Home() {
     selectedCharacterId,
     selectedScene,
     loadUserCharacters,
+    user,
   ])
   useEffect(() => {
     // Listen for route changes and reset chat state when returning to homepage
@@ -604,7 +642,13 @@ export default function Home() {
    * @returns JSX.Element | null The button or null when hidden on mobile during startup.
    */
   const ChatButton = useCallback(() => {
-    if (isChatStarting || (isMobile && isLogin) || shouldHideWebAuthChrome()) {
+    if (isChatStarting) {
+      return null
+    }
+    if (isMobile && isLogin && !isNativeApp()) {
+      return null
+    }
+    if (shouldHideWebAuthChrome() && !isNativeApp()) {
       return null
     }
     return (
@@ -639,6 +683,7 @@ export default function Home() {
     chatAvailable,
     isCharacterLoading,
     isSceneLoading,
+    t,
   ])
   /**
    * Missing secret requirements renderer.
@@ -773,6 +818,14 @@ export default function Home() {
             onSceneChange={handleSceneChange}
           />
         </>
+      )}
+      {!isChatStarting && isLogin && isNativeApp() && (
+        <NativeScenePicker
+          onSceneChange={handleSceneChange}
+          chatAvailable={chatAvailable}
+          isCharacterLoading={isCharacterLoading}
+          isSceneLoading={isSceneLoading}
+        />
       )}
       {/* Unsupported TTS Notice */}
       <MobileNoticePanel

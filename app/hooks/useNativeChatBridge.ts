@@ -1,10 +1,15 @@
 import { useEffect, useRef } from 'react'
 import { useSelector } from 'react-redux'
 import { getIsLogin } from '@/features/auth/authStore'
+import { getUserInfo } from '@/features/auth/authStore'
 import { getSelectedCharacterId } from '@/features/chat/chat'
 import type { Character } from '@/request/api'
+import { getCharacterConfig } from '@/request/api'
 import { isNativeApp, onNativeMessage, sendToNative } from '@/utils/nativeBridge'
-import { characterToNativeChat } from '@/utils/nativeChatSync'
+import {
+  characterToNativeChat,
+  characterConfigToNativeChat,
+} from '@/utils/nativeChatSync'
 
 export interface NativeChatBridgeParams {
   characters: Character[]
@@ -24,6 +29,7 @@ export function useNativeChatBridge({
 }: NativeChatBridgeParams) {
   const selectedCharacterId = useSelector(getSelectedCharacterId)
   const isLogin = useSelector(getIsLogin)
+  const user = useSelector(getUserInfo)
 
   const handlersRef = useRef({
     selectCharacter,
@@ -37,7 +43,9 @@ export function useNativeChatBridge({
   }
 
   useEffect(() => {
-    if (!isNativeApp() || !isLogin) return
+    if (!isNativeApp() || !isLogin || !user?.id) return
+
+    // Send basic data immediately so RN gets something fast
     sendToNative({
       type: 'chat:list:updated',
       payload: {
@@ -45,7 +53,32 @@ export function useNativeChatBridge({
         selectedCharacterId,
       },
     })
-  }, [characters, selectedCharacterId, isLogin])
+
+    // Then fetch full configs and send enriched data
+    let cancelled = false
+    ;(async () => {
+      try {
+        const results = await Promise.allSettled(
+          characters.map(c => getCharacterConfig(user.id, c.character_id)),
+        )
+        if (cancelled) return
+        const enriched = results.map((r, i) =>
+          r.status === 'fulfilled'
+            ? characterConfigToNativeChat(r.value)
+            : characterToNativeChat(characters[i]),
+        )
+        sendToNative({
+          type: 'chat:list:updated',
+          payload: { chats: enriched, selectedCharacterId },
+        })
+      } catch {
+        // basic data already sent, ignore enrichment failure
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [characters, selectedCharacterId, isLogin, user?.id])
 
   useEffect(() => {
     if (!isNativeApp()) return

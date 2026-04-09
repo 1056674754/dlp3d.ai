@@ -13,6 +13,7 @@ import { getIsChatStarting, getSelectedCharacterId } from '@/features/chat/chat'
 
 import { setIsSliderOpen } from '@/features/chat/chat'
 import { usePromptingSettings } from '@/hooks/usePromptingSettings'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 
 /**
  * Props for ConfigSidebar component.
@@ -152,7 +153,7 @@ export default function ConfigSidebar({
             style={{ position: 'relative' }}
           >
             <div className="config-sidebar-item-icon">
-              <img src={item.icon} />
+              <img src={resolvePublicUrl(item.icon)} />
             </div>
             <span className="config-sidebar-item-name">{item.name}</span>
           </div>

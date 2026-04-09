@@ -3,6 +3,7 @@
 import { useTranslation } from 'react-i18next'
 import { useState, useEffect, useCallback } from 'react'
 import { useDevice } from '@/contexts/DeviceContext'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 
 /**
  * Language switcher component.
@@ -53,7 +54,7 @@ export default function LanguageSwitcher() {
   const icon = useCallback(() => {
     return (
       <img
-        src={currentLang === 'zh' ? LanguageEn : LanguageZh}
+        src={resolvePublicUrl(currentLang === 'zh' ? LanguageEn : LanguageZh)}
         alt="Language"
         style={{ width: '25px', height: '25px' }}
       />

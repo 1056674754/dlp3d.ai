@@ -11,10 +11,15 @@ import {
 } from 'react-native';
 import { Text, Button, useTheme } from 'react-native-paper';
 import { useSelector, useDispatch } from 'react-redux';
+import { useTranslation } from 'react-i18next';
 import type { RootState } from '@/store';
 import { setServerUrl } from '@/store/appSlice';
 import { setAuthState, setIsLogin } from '@/store/authSlice';
-import { authenticateUser, registerUser } from '@/services/api';
+import { loginDashboardSession, registerUser } from '@/services/api';
+import {
+  MAX_FONT_SIZE_MULTIPLIER,
+  paperButtonFontScalingProps,
+} from '@/theme/fontScaling';
 import {
   getSavedAccounts,
   saveAccount,
@@ -30,6 +35,7 @@ interface AuthScreenProps {
 
 export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
   const theme = useTheme();
+  const { t } = useTranslation();
   const dispatch = useDispatch();
   const serverUrl = useSelector((state: RootState) => state.app.serverUrl);
 
@@ -68,19 +74,23 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
 
   const handleDeleteAccount = useCallback(
     (account: SavedAccount) => {
-      Alert.alert('Remove Account', `Remove saved account ${account.email}?`, [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            await removeAccount(account.serverUrl, account.email);
-            await loadAccounts();
+      Alert.alert(
+        t('auth.removeAccountTitle'),
+        t('auth.removeAccountMessage', { email: account.email }),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          {
+            text: t('common.remove'),
+            style: 'destructive',
+            onPress: async () => {
+              await removeAccount(account.serverUrl, account.email);
+              await loadAccounts();
+            },
           },
-        },
-      ]);
+        ],
+      );
     },
-    [],
+    [t],
   );
 
   const handleSaveUrl = () => {
@@ -89,17 +99,17 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
       dispatch(setServerUrl(trimmed));
       setShowServerInput(false);
     } else {
-      Alert.alert('Invalid URL', 'Server URL must start with http:// or https://');
+      Alert.alert(t('auth.invalidUrlTitle'), t('auth.invalidUrlMessage'));
     }
   };
 
   const handleSubmit = async () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Please fill in email and password');
+      Alert.alert(t('common.error'), t('auth.fillEmailPassword'));
       return;
     }
     if (!email.includes('@') || !email.includes('.')) {
-      Alert.alert('Error', 'Please enter a valid email address');
+      Alert.alert(t('common.error'), t('auth.invalidEmail'));
       return;
     }
 
@@ -109,42 +119,48 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
     try {
       if (isRegister) {
         if (!username) {
-          Alert.alert('Error', 'Please enter a username');
+          Alert.alert(t('common.error'), t('auth.enterUsername'));
           setLoading(false);
           return;
         }
         const response = await registerUser(currentUrl, email, password);
         if (response.auth_code === 200) {
-          Alert.alert('Success', 'Registration successful! You can now log in.');
+          Alert.alert(
+            t('auth.registrationSuccessTitle'),
+            t('auth.registrationSuccessMessage'),
+          );
           setIsRegister(false);
         } else {
-          Alert.alert('Registration Failed', response.auth_msg);
+          Alert.alert(t('auth.registrationFailedTitle'), response.auth_msg);
         }
       } else {
-        const response = await authenticateUser(currentUrl, email, password);
-        if (response.auth_code === 200) {
+        const response = await loginDashboardSession(
+          currentUrl,
+          email,
+          password,
+        );
+        if (response.user?.id) {
           dispatch(
             setAuthState({
               isLogin: true,
-              userInfo: { username: email, email, id: response.user_id },
+              userInfo: { username: email, email, id: response.user.id },
             }),
           );
           await saveAccount({
             serverUrl: currentUrl,
             email,
             password,
-            userId: response.user_id,
+            userId: response.user.id,
             lastUsed: Date.now(),
           });
           await loadAccounts();
-          onLogin(response.user_id, email);
-        } else {
-          Alert.alert('Login Failed', response.auth_msg);
+          onLogin(response.user.id, email);
         }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Network error';
-      Alert.alert('Error', message);
+      const message =
+        err instanceof Error ? err.message : t('auth.networkError');
+      Alert.alert(t('common.error'), message);
     } finally {
       setLoading(false);
     }
@@ -157,20 +173,26 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'android' ? 'height' : 'padding'}
-      style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+    >
       <ScrollView
         contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled">
-        <Text style={[styles.title, { color: theme.colors.primary }]}>DLP3D</Text>
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={[styles.title, { color: theme.colors.primary }]}>
+          DLP3D
+        </Text>
         <Text style={[styles.subtitle, { color: textColor }]}>
-          {isRegister ? 'Create Account' : 'Welcome Back'}
+          {isRegister ? t('auth.createAccount') : t('auth.welcomeBack')}
         </Text>
 
         <View style={styles.form}>
           {savedAccounts.length > 0 && !isRegister && (
             <View style={styles.accountsSection}>
-              <Text style={{ color: mutedColor, fontSize: 12, marginBottom: 8 }}>
-                Saved Accounts
+              <Text
+                style={{ color: mutedColor, fontSize: 12, marginBottom: 8 }}
+              >
+                {t('auth.savedAccounts')}
               </Text>
               {savedAccounts.map(account => (
                 <TouchableOpacity
@@ -183,19 +205,36 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
                       borderColor: theme.colors.outline + '40',
                       backgroundColor: theme.colors.surface,
                     },
-                  ]}>
+                  ]}
+                >
                   <View style={styles.accountInfo}>
-                    <Text style={{ color: textColor, fontSize: 14, fontWeight: '500' }}>
+                    <Text
+                      style={{
+                        color: textColor,
+                        fontSize: 14,
+                        fontWeight: '500',
+                      }}
+                    >
                       {account.email}
                     </Text>
-                    <Text style={{ color: mutedColor, fontSize: 11 }} numberOfLines={1}>
+                    <Text
+                      style={{ color: mutedColor, fontSize: 11 }}
+                      numberOfLines={1}
+                    >
                       {account.serverUrl}
                     </Text>
                   </View>
-                  <Text style={{ color: theme.colors.primary, fontSize: 12 }}>Use →</Text>
+                  <Text style={{ color: theme.colors.primary, fontSize: 12 }}>
+                    {t('auth.useAccount')} →
+                  </Text>
                 </TouchableOpacity>
               ))}
-              <View style={[styles.divider, { borderColor: theme.colors.outline + '20' }]} />
+              <View
+                style={[
+                  styles.divider,
+                  { borderColor: theme.colors.outline + '20' },
+                ]}
+              />
             </View>
           )}
 
@@ -204,9 +243,15 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
               setEditingUrl(serverUrl);
               setShowServerInput(true);
             }}
-            style={[styles.serverRow, { borderColor: theme.colors.outline }]}>
-            <Text style={{ color: mutedColor, fontSize: 12 }}>Server</Text>
-            <Text style={{ color: theme.colors.primary, fontSize: 14, flex: 1 }} numberOfLines={1}>
+            style={[styles.serverRow, { borderColor: theme.colors.outline }]}
+          >
+            <Text style={{ color: mutedColor, fontSize: 12 }}>
+              {t('auth.serverRowLabel')}
+            </Text>
+            <Text
+              style={{ color: theme.colors.primary, fontSize: 14, flex: 1 }}
+              numberOfLines={1}
+            >
               {serverUrl}
             </Text>
             <Text style={{ color: faintColor, fontSize: 18 }}>✎</Text>
@@ -220,34 +265,42 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
                   borderColor: theme.colors.outline,
                   backgroundColor: theme.colors.surface,
                 },
-              ]}>
+              ]}
+            >
               <TextInput
                 style={[
                   styles.input,
                   { color: textColor, borderColor: theme.colors.primary },
                 ]}
-                placeholder="https://your-server.com"
+                placeholder={t('auth.serverPlaceholder')}
                 placeholderTextColor={faintColor}
                 value={editingUrl}
                 onChangeText={setEditingUrl}
                 keyboardType="url"
                 autoCapitalize="none"
                 autoCorrect={false}
+                maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
               />
               <View style={styles.serverEditActions}>
                 <TouchableOpacity
                   onPress={() => setShowServerInput(false)}
-                  style={styles.serverBtn}>
-                  <Text style={{ color: mutedColor }}>Cancel</Text>
+                  style={styles.serverBtn}
+                >
+                  <Text style={{ color: mutedColor }}>
+                    {t('common.cancel')}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={handleSaveUrl}
                   style={[
                     styles.serverBtn,
                     { backgroundColor: theme.colors.primary + '20' },
-                  ]}>
-                  <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>
-                    Save
+                  ]}
+                >
+                  <Text
+                    style={{ color: theme.colors.primary, fontWeight: '600' }}
+                  >
+                    {t('common.save')}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -256,51 +309,68 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
 
           {isRegister && (
             <TextInput
-              style={[styles.input, { color: textColor, borderColor: theme.colors.outline }]}
-              placeholder="Username"
+              style={[
+                styles.input,
+                { color: textColor, borderColor: theme.colors.outline },
+              ]}
+              placeholder={t('auth.usernamePlaceholder')}
               placeholderTextColor={mutedColor}
               value={username}
               onChangeText={setUsername}
               autoCapitalize="none"
+              maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
             />
           )}
 
           <TextInput
-            style={[styles.input, { color: textColor, borderColor: theme.colors.outline }]}
-            placeholder="Email"
+            style={[
+              styles.input,
+              { color: textColor, borderColor: theme.colors.outline },
+            ]}
+            placeholder={t('auth.emailPlaceholder')}
             placeholderTextColor={mutedColor}
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
             autoCapitalize="none"
+            maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
           />
 
           <TextInput
-            style={[styles.input, { color: textColor, borderColor: theme.colors.outline }]}
-            placeholder="Password"
+            style={[
+              styles.input,
+              { color: textColor, borderColor: theme.colors.outline },
+            ]}
+            placeholder={t('auth.passwordPlaceholder')}
             placeholderTextColor={mutedColor}
             value={password}
             onChangeText={setPassword}
             secureTextEntry
+            maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
           />
 
           <Button
+            {...paperButtonFontScalingProps}
             mode="contained"
             onPress={handleSubmit}
             loading={loading}
             disabled={loading}
             style={styles.button}
-            buttonColor={theme.colors.primary}>
-            {isRegister ? 'Sign Up' : 'Log In'}
+            buttonColor={theme.colors.primary}
+          >
+            {isRegister ? t('auth.signUp') : t('auth.logIn')}
           </Button>
 
           <TouchableOpacity
             onPress={() => setIsRegister(!isRegister)}
-            style={styles.switchMode}>
+            style={styles.switchMode}
+          >
             <Text style={{ color: mutedColor }}>
-              {isRegister ? 'Already have an account? ' : "Don't have an account? "}
+              {isRegister
+                ? `${t('auth.alreadyHaveAccount')} `
+                : `${t('auth.dontHaveAccount')} `}
               <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>
-                {isRegister ? 'Log In' : 'Sign Up'}
+                {isRegister ? t('auth.logIn') : t('auth.signUp')}
               </Text>
             </Text>
           </TouchableOpacity>

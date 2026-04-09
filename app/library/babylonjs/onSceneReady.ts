@@ -11,11 +11,15 @@ import { Runtime } from '@/library/babylonjs/runtime'
 import {
   Conditions,
   ConditionedMessage,
+  States,
   StateMachine,
 } from '@/library/babylonjs/runtime/fsm'
+import { getChatList } from '@/library/babylonjs/runtime/request/api'
+import { getCharacterConfig } from '@/request/api'
 import { Logger, LogLevel } from '@/library/babylonjs/utils'
 import { LoadingProgressManager } from '../../utils/progressManager'
 import { HDRI_SCENES } from '@/library/babylonjs/config/scene'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 import { ConfigSync } from '@/library/babylonjs/config'
 import i18n from '@/i18n/config'
 
@@ -46,6 +50,77 @@ async function getUserId(): Promise<UserIdResult> {
 
   return {
     id: userInfo.id,
+  }
+}
+
+/**
+ * Resolve a valid character ID for the chat page.
+ *
+ * Android chat can open `babylon` directly without first visiting the browser-style
+ * home/config page that normally populates `dlp_selected_character_id`. When that
+ * happens, the runtime falls back to `default_character_1`, which may not exist for
+ * the current user and causes the state machine to exit during startup.
+ */
+async function resolveInitialCharacterId(userId: string): Promise<string | null> {
+  const storedCharacterId = localStorage.getItem('dlp_selected_character_id')
+
+  try {
+    const chatList = await getChatList(userId)
+    const availableIds = chatList.character_id_list ?? []
+    const availableNames = chatList.character_name_list ?? []
+    if (availableIds.length === 0) {
+      return storedCharacterId
+    }
+
+    if (storedCharacterId && availableIds.includes(storedCharacterId)) {
+      return storedCharacterId
+    }
+
+    const customCharacterIndex = availableNames.findIndex(name => {
+      const normalized = (name ?? '').trim()
+      return (
+        normalized.length > 0 &&
+        !normalized.endsWith('-default') &&
+        !normalized.endsWith('-系统默认')
+      )
+    })
+
+    const fallbackCharacterId =
+      (customCharacterIndex >= 0
+        ? availableIds[customCharacterIndex]
+        : availableIds[0]) ?? null
+    if (fallbackCharacterId) {
+      localStorage.setItem('dlp_selected_character_id', fallbackCharacterId)
+    }
+    return fallbackCharacterId
+  } catch (error) {
+    Logger.warn(`Failed to resolve initial character id: ${error}`)
+    return storedCharacterId
+  }
+}
+
+async function seedSceneIndexForCharacter(
+  userId: string,
+  characterId: string | null,
+): Promise<number | null> {
+  if (!characterId || typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const character = await getCharacterConfig(userId, characterId)
+    const sceneName = (character.scene_name || '').trim()
+    if (!sceneName) {
+      return null
+    }
+
+    const index = HDRI_SCENES.findIndex(scene => scene.name === sceneName)
+    const resolvedIndex = index === -1 ? 3 : index
+    localStorage.setItem('dlp_scene_index', String(resolvedIndex))
+    return resolvedIndex
+  } catch (error) {
+    Logger.warn(`Failed to seed scene index for character ${characterId}: ${error}`)
+    return null
   }
 }
 
@@ -124,8 +199,9 @@ export default async function onSceneReady(globalState: GlobalState) {
   const userIdResult: UserIdResult = await getUserId()
   Logger.log(`User ID injection result: userId: ${userIdResult.id}`)
 
-  const characterIdOverride = localStorage.getItem('dlp_selected_character_id')
+  const characterIdOverride = await resolveInitialCharacterId(userIdResult.id)
   Logger.log(`Character ID injection result: characterId: ${characterIdOverride}`)
+  await seedSceneIndexForCharacter(userIdResult.id, characterIdOverride)
 
   // Additional logging for character ID debugging
   if (characterIdOverride) {
@@ -186,46 +262,66 @@ export default async function onSceneReady(globalState: GlobalState) {
   stateMachine.run()
   globalState.stateMachine = stateMachine
 
+  const startCharacterAnimation = () => {
+    Logger.log(
+      'Starting character animation, preparing to send USER_START_GAME condition',
+    )
+
+    const startRadius = roamingCamera.radius
+    const targetRadius = Math.max(1.2, 1.6)
+    const startTargetY = roamingCamera.target.y
+    const targetTargetY = 1
+    const duration = 800
+    const startTime = performance.now()
+
+    function animateCameraRadius(now: number) {
+      const elapsed = now - startTime
+      const t = Math.min(1, elapsed / duration)
+
+      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
+      roamingCamera.radius = startRadius + (targetRadius - startRadius) * ease
+
+      roamingCamera.target.y = startTargetY + (targetTargetY - startTargetY) * ease
+      if (t < 1) {
+        requestAnimationFrame(animateCameraRadius)
+      } else {
+        roamingCamera.radius = targetRadius
+        roamingCamera.target.y = targetTargetY
+      }
+    }
+
+    requestAnimationFrame(animateCameraRadius)
+
+    stateMachine.putConditionedMessage(
+      new ConditionedMessage(Conditions.USER_START_GAME, {
+        message: 'User clicked start button, starting character animation',
+      }),
+    )
+    Logger.log('USER_START_GAME condition has been sent to state machine')
+  }
+
+  const maybeAutoStartNativeChat = () => {
+    if (typeof window === 'undefined' || window.location.protocol !== 'file:') {
+      return false
+    }
+    if ((window as any).__DLP3D_NATIVE_CHAT_AUTOSTARTED__) {
+      return true
+    }
+    if ((stateMachine as any)._stateValue !== States.WAITING_FOR_USER_START_GAME) {
+      return false
+    }
+    ;(window as any).__DLP3D_NATIVE_CHAT_AUTOSTARTED__ = true
+    window.dispatchEvent(new Event('chat-starting'))
+    startCharacterAnimation()
+    Logger.log('Native chat auto-start has been triggered')
+    return true
+  }
+
   // listen for start-character-animation event
   if (typeof window !== 'undefined') {
-    // ensure the event listener is only added once
     const eventHandler = () => {
-      Logger.log(
-        'Received start-character-animation event, preparing to send USER_START_GAME condition',
-      )
-
-      // Execute camera animation
-      const startRadius = roamingCamera.radius
-      const targetRadius = Math.max(1.2, 1.6)
-      const startTargetY = roamingCamera.target.y
-      const targetTargetY = 1
-      const duration = 800
-      const startTime = performance.now()
-
-      function animateCameraRadius(now: number) {
-        const elapsed = now - startTime
-        const t = Math.min(1, elapsed / duration)
-
-        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
-        roamingCamera.radius = startRadius + (targetRadius - startRadius) * ease
-
-        roamingCamera.target.y = startTargetY + (targetTargetY - startTargetY) * ease
-        if (t < 1) {
-          requestAnimationFrame(animateCameraRadius)
-        } else {
-          roamingCamera.radius = targetRadius
-          roamingCamera.target.y = targetTargetY
-        }
-      }
-
-      requestAnimationFrame(animateCameraRadius)
-
-      stateMachine.putConditionedMessage(
-        new ConditionedMessage(Conditions.USER_START_GAME, {
-          message: 'User clicked start button, starting character animation',
-        }),
-      )
-      Logger.log('USER_START_GAME condition has been sent to state machine')
+      Logger.log('Received start-character-animation event')
+      startCharacterAnimation()
     }
 
     // Remove any existing old listeners
@@ -233,6 +329,18 @@ export default async function onSceneReady(globalState: GlobalState) {
     // Add new listener
     window.addEventListener('start-character-animation', eventHandler)
     Logger.log('start-character-animation event listener has been added')
+  }
+
+  if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+    if (!maybeAutoStartNativeChat()) {
+      let attempts = 0
+      const intervalId = window.setInterval(() => {
+        attempts += 1
+        if (maybeAutoStartNativeChat() || attempts >= 120) {
+          window.clearInterval(intervalId)
+        }
+      }, 250)
+    }
   }
 
   // setup gizmo
@@ -247,6 +355,36 @@ export default async function onSceneReady(globalState: GlobalState) {
   runtime.setAudioPlayer(audioPlayer)
 
   globalState.runtime = runtime
+
+  if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+    ;(window as any).__DLP3D_DEBUG__ = {
+      globalState,
+      getSnapshot: () => {
+        const recordAudioButton =
+          globalState.gui?.renderViewTexture.getControlByName(
+            'recordAudioButton',
+          ) as { isEnabled?: boolean; isVisible?: boolean } | undefined
+        return {
+          recordState: globalState.audioStreamState?.recordState ?? null,
+          isUserStreaming: globalState.isUserStreaming,
+          recordButtonEnabled: recordAudioButton?.isEnabled ?? null,
+          recordButtonVisible: recordAudioButton?.isVisible ?? null,
+          stateValue: (globalState.stateMachine as any)?._stateValue ?? null,
+        }
+      },
+      startRawRecord: () => globalState.audioStreamState?.startRecord(),
+      stopRawRecord: () => globalState.audioStreamState?.stopRecord(),
+      triggerRecordStart: () =>
+        globalState.stateMachine?.putConditionedMessage(
+          new ConditionedMessage(Conditions.USER_START_RECORDING, null),
+        ),
+      triggerRecordStop: () =>
+        globalState.stateMachine?.putConditionedMessage(
+          new ConditionedMessage(Conditions.USER_STOP_RECORDING, null),
+        ),
+    }
+    Logger.log('Android debug API exposed on window.__DLP3D_DEBUG__')
+  }
 
   roamingCamera.viewport = new BABYLON.Viewport(0, 0, 1, 1)
   scene.cameraToUseForPointers = roamingCamera
@@ -267,6 +405,7 @@ export default async function onSceneReady(globalState: GlobalState) {
         setTimeout(() => {
           window.dispatchEvent(new Event('character-loaded'))
           Logger.log('character-loaded event has been dispatched')
+          maybeAutoStartNativeChat()
         }, 500)
       }
     }
@@ -321,7 +460,10 @@ export default async function onSceneReady(globalState: GlobalState) {
     stack.isVertical = true
     rect.addControl(stack)
 
-    const titleLogo = new BABYLON_GUI.Image('titleLogo', '/img/logo-title.png')
+    const titleLogo = new BABYLON_GUI.Image(
+      'titleLogo',
+      resolvePublicUrl('/img/logo-title.png'),
+    )
     titleLogo.width = '50%'
     titleLogo.height = '75px'
     titleLogo.top = '-10px'
@@ -339,14 +481,16 @@ export default async function onSceneReady(globalState: GlobalState) {
     })
   }
 
-  const sceneIndexValid = Number.isInteger(
-    Number(localStorage.getItem('dlp_scene_index')),
-  )
+  const storedSceneIndex = Number(localStorage.getItem('dlp_scene_index'))
+  const sceneIndexValid =
+    Number.isInteger(storedSceneIndex) &&
+    storedSceneIndex >= 0 &&
+    storedSceneIndex < HDRI_SCENES.length
+  const sceneIndex = sceneIndexValid ? storedSceneIndex : 3
   if (!sceneIndexValid) {
-    Logger.error('Invalid scene index in local storage')
-    return
+    Logger.warn('Invalid scene index in local storage, falling back to Vast')
+    localStorage.setItem('dlp_scene_index', String(sceneIndex))
   }
-  const sceneIndex = parseInt(localStorage.getItem('dlp_scene_index') || '0')
   const isGreenBackground =
     HDRI_SCENES[sceneIndex].groundModel?.filename.includes('green')
 
@@ -354,7 +498,7 @@ export default async function onSceneReady(globalState: GlobalState) {
     // Create particle system
     const particleSystem = new BABYLON.ParticleSystem('particles', 300, scene)
     const particleTexture = new BABYLON.Texture(
-      '/img/particle_circle.png.png',
+      resolvePublicUrl('/img/particle_circle.png.png'),
       scene,
     )
     particleSystem.particleTexture = particleTexture

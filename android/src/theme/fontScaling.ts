@@ -5,8 +5,37 @@
  */
 import { Text, TextInput } from 'react-native';
 
-/** Still allows ~15% scaling for mild accessibility; set lower (e.g. 1.0) for stricter cap. */
-const MAX_FONT_SIZE_MULTIPLIER = 1.15;
+/**
+ * Keep the app at design size by default.
+ * Some Android large-screen devices ship with boosted system text scaling,
+ * which makes the UI look oversized even in non-accessibility use.
+ */
+export const MAX_FONT_SIZE_MULTIPLIER = 1.0;
+
+export const paperButtonFontScalingProps = {
+  maxFontSizeMultiplier: MAX_FONT_SIZE_MULTIPLIER,
+} as const;
+
+export const paperChipFontScalingProps = {
+  maxFontSizeMultiplier: MAX_FONT_SIZE_MULTIPLIER,
+} as const;
+
+export const paperFabFontScalingProps = {
+  labelMaxFontSizeMultiplier: MAX_FONT_SIZE_MULTIPLIER,
+} as const;
+
+export const paperListItemFontScalingProps = {
+  titleMaxFontSizeMultiplier: MAX_FONT_SIZE_MULTIPLIER,
+  descriptionMaxFontSizeMultiplier: MAX_FONT_SIZE_MULTIPLIER,
+} as const;
+
+export const paperSubheaderFontScalingProps = {
+  maxFontSizeMultiplier: MAX_FONT_SIZE_MULTIPLIER,
+} as const;
+
+export const paperTextInputFontScalingProps = {
+  maxFontSizeMultiplier: MAX_FONT_SIZE_MULTIPLIER,
+} as const;
 
 const T = Text as typeof Text & {
   defaultProps?: { maxFontSizeMultiplier?: number };

@@ -11,6 +11,7 @@ import {
   RelationshipStage,
 } from '@/library/babylonjs/runtime/character/relationship'
 import { Emotion } from '@/library/babylonjs/runtime/character/emotions'
+import { resolveBabylonAssetUrl } from '@/utils/nativeAssets'
 
 /**
  * Character
@@ -144,8 +145,15 @@ export class Character {
     constraintsUrl: string | undefined | null,
     rigidBodiesUrl: string | undefined | null,
   ) {
-    const rootUrl = BABYLON.Tools.GetFolderPath(assetUrl)
-    const fileName = BABYLON.Tools.GetFilename(assetUrl)
+    const loadableAssetUrl = await resolveBabylonAssetUrl(
+      assetUrl,
+      'model/gltf-binary',
+    )
+    const isBlobUrl = loadableAssetUrl.startsWith('blob:')
+    const rootUrl = isBlobUrl ? '' : BABYLON.Tools.GetFolderPath(loadableAssetUrl)
+    const fileName = isBlobUrl
+      ? loadableAssetUrl
+      : BABYLON.Tools.GetFilename(loadableAssetUrl)
     try {
       const imported = await BABYLON.SceneLoader.ImportMeshAsync(
         '',

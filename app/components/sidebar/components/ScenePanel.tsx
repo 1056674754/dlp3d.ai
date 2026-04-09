@@ -11,6 +11,7 @@ import { usePromptingSettings } from '@/hooks/usePromptingSettings'
 import { HDRI_SCENES } from '@/library/babylonjs/config/scene'
 import { useTranslation } from 'react-i18next'
 import GlobalTooltip from '@/components/common/GlobalTooltip'
+import { resolvePublicUrl } from '@/utils/publicUrl'
 
 /**
  * Props for ScenePanel component.
@@ -69,7 +70,7 @@ export default function ScenePanel({ onSceneChange }: ScenePanelProps) {
             style={{ position: 'relative' }}
           >
             <img
-              src={scene.image}
+              src={resolvePublicUrl(scene.image)}
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
 

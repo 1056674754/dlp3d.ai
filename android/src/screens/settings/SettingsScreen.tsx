@@ -1,141 +1,211 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   ScrollView,
   StyleSheet,
   Alert,
   ActivityIndicator,
-  Platform,
+  Pressable,
+  Image,
 } from 'react-native';
 import {
   Text,
-  Switch,
   List,
   Divider,
   useTheme,
   Button,
   Portal,
-  Dialog,
   TextInput,
-  RadioButton,
-  ProgressBar,
+  Chip,
+  MD3Theme,
 } from 'react-native-paper';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useSelector, useDispatch } from 'react-redux';
 import type { RootState } from '@/store';
-import type { NativeAssetDownloadRow } from '@/store/nativeAssetDownloadSlice';
-import {
-  setLanguage,
-  setTheme,
-  setServerUrl,
-  setCharacterAssetsBaseUrl,
-  setSceneAssetsBaseUrl,
-} from '@/store/appSlice';
-import { logout } from '@/store/authSlice';
+import { setSettingsCharacterId } from '@/store/chatSlice';
 import { bridge } from '@/bridge/WebViewBridge';
-import { HDRI_SCENE_NAMES } from '@/constants/hdriScenes';
+import {
+  HDRI_SCENE_NAMES,
+  normalizeHdriSceneName,
+  resolveHdriPreviewUri,
+} from '@/constants/hdriScenes';
 import {
   fetchAvailableLlm,
+  fetchAvailableAsr,
+  fetchAvailableTts,
+  fetchConversationChoices,
+  fetchAsrChoices,
+  fetchTtsChoices,
+  fetchTtsVoiceNames,
   fetchCharacterConfig,
-  saveConversationSettings,
-  saveTtsSettings,
-  savePrompt,
-  saveScene,
+  fetchDashboardCharacter,
+  patchDashboardCharacter,
   type CharacterConfigDto,
 } from '@/services/characterSettingsApi';
+import { useTranslation } from 'react-i18next';
+import { restoreDashboardSession } from '@/services/api';
+import {
+  paperButtonFontScalingProps,
+  paperChipFontScalingProps,
+  paperListItemFontScalingProps,
+  paperSubheaderFontScalingProps,
+  paperTextInputFontScalingProps,
+} from '@/theme/fontScaling';
 
-type TabParamList = {
-  Home: undefined;
-  ChatList: undefined;
-  Settings: undefined;
-};
-
-type SettingsTabNav = BottomTabNavigationProp<TabParamList, 'Settings'>;
-
-function nativeAssetStatusDescription(row: NativeAssetDownloadRow): string {
-  switch (row.status) {
-    case 'pending':
-      return '待拉取';
-    case 'running':
-      return '拉取中…';
-    case 'ok':
-      return '已缓存';
-    case 'skipped':
-      return '不可用（已跳过）';
-    case 'error':
-      return '失败';
-    default:
-      return row.status;
+function mergeChoicesWithCurrent(
+  choices: string[],
+  currentValue: string | undefined,
+): string[] {
+  if (!currentValue || choices.includes(currentValue)) {
+    return choices;
   }
+  return [currentValue, ...choices];
 }
 
-function nativeAssetStatusIcon(
-  status: NativeAssetDownloadRow['status'],
+function isChoiceAvailable(
+  choice: string,
+  availableProviders: string[],
+): boolean {
+  return availableProviders.some(
+    provider => choice === provider || choice.startsWith(provider),
+  );
+}
+
+function getSceneLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  sceneName: string,
 ): string {
-  switch (status) {
-    case 'ok':
-      return 'check-circle';
-    case 'skipped':
-      return 'close-circle-outline';
-    case 'running':
-      return 'progress-download';
-    case 'error':
-      return 'alert-circle';
-    default:
-      return 'circle-outline';
-  }
+  return t(`settings.scenes.${sceneName}`, { defaultValue: sceneName });
+}
+
+interface VoiceOption {
+  value: string;
+  label: string;
+}
+
+function getVoiceLabel(voiceOptions: VoiceOption[], voiceId: string): string {
+  const matched = voiceOptions.find(option => option.value === voiceId);
+  return matched?.label || voiceId;
+}
+
+function getAvailabilityDescription(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  available: boolean,
+  enabledLabel: string,
+): string {
+  return available ? enabledLabel : t('settings.unavailable');
+}
+
+const SPEED_MARKS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] as const;
+const SPEED_MIN = 0.5;
+const SPEED_MAX = 2.0;
+const SPEED_STEP = 0.1;
+
+function clampSpeed(value: number): number {
+  const rounded = Math.round(value / SPEED_STEP) * SPEED_STEP;
+  return Math.max(SPEED_MIN, Math.min(SPEED_MAX, Number(rounded.toFixed(2))));
+}
+
+interface BottomSheetProps {
+  onClose: () => void;
+  title: string;
+  theme: MD3Theme;
+  closeLabel: string;
+  children: React.ReactNode;
+}
+
+function BottomSheet({
+  onClose,
+  title,
+  theme,
+  closeLabel,
+  children,
+}: BottomSheetProps) {
+  return (
+    <View style={styles.sheetOverlay}>
+      <Pressable style={styles.sheetBackdrop} onPress={onClose} />
+      <View style={[styles.sheet, { backgroundColor: theme.colors.surface }]}>
+        <View style={styles.sheetHeader}>
+          <Text style={[styles.sheetTitle, { color: theme.colors.onSurface }]}>
+            {title}
+          </Text>
+          <Button {...paperButtonFontScalingProps} compact onPress={onClose}>
+            {closeLabel}
+          </Button>
+        </View>
+        <ScrollView
+          style={styles.sheetScroll}
+          contentContainerStyle={styles.sheetScrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          {children}
+        </ScrollView>
+      </View>
+    </View>
+  );
 }
 
 export function SettingsScreen() {
   const theme = useTheme();
+  const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const dispatch = useDispatch();
-  const navigation = useNavigation<SettingsTabNav>();
-  const language = useSelector((state: RootState) => state.app.language);
-  const appTheme = useSelector((state: RootState) => state.app.theme);
   const serverUrl = useSelector((state: RootState) => state.app.serverUrl);
-  const characterAssetsBaseUrl = useSelector(
-    (state: RootState) => state.app.characterAssetsBaseUrl ?? '',
-  );
-  const sceneAssetsBaseUrl = useSelector(
-    (state: RootState) => state.app.sceneAssetsBaseUrl ?? '',
-  );
-  const nativeAssetDl = useSelector(
-    (state: RootState) => state.nativeAssetDownload,
-  );
   const userInfo = useSelector((state: RootState) => state.auth.userInfo);
   const selectedCharacterId = useSelector(
     (state: RootState) => state.chat.selectedCharacterId,
   );
-
-  const [showUrlDialog, setShowUrlDialog] = useState(false);
-  const [editingUrl, setEditingUrl] = useState(serverUrl);
-  const [showCharacterAssetsDialog, setShowCharacterAssetsDialog] =
-    useState(false);
-  const [editingCharacterAssetsUrl, setEditingCharacterAssetsUrl] =
-    useState('');
-  const [showSceneAssetsDialog, setShowSceneAssetsDialog] = useState(false);
-  const [editingSceneAssetsUrl, setEditingSceneAssetsUrl] = useState('');
+  const settingsCharacterId = useSelector(
+    (state: RootState) => state.chat.settingsCharacterId,
+  );
+  const activeCharacterId = settingsCharacterId ?? selectedCharacterId;
 
   const [config, setConfig] = useState<CharacterConfigDto | null>(null);
-  const [llmOptions, setLlmOptions] = useState<string[]>([]);
+  const [llmAvailableProviders, setLlmAvailableProviders] = useState<string[]>(
+    [],
+  );
+  const [asrAvailableProviders, setAsrAvailableProviders] = useState<string[]>(
+    [],
+  );
+  const [ttsAvailableProviders, setTtsAvailableProviders] = useState<string[]>(
+    [],
+  );
+  const [conversationChoices, setConversationChoices] = useState<string[]>([]);
+  const [asrChoices, setAsrChoices] = useState<string[]>([]);
+  const [ttsChoices, setTtsChoices] = useState<string[]>([]);
+  const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  const [voiceLoading, setVoiceLoading] = useState(false);
 
   const [llmDialog, setLlmDialog] = useState(false);
   const [pickConv, setPickConv] = useState('');
   const [pickOverride, setPickOverride] = useState('');
+  const [asrDialog, setAsrDialog] = useState(false);
+  const [pickAsr, setPickAsr] = useState('');
+  const [ttsDialog, setTtsDialog] = useState(false);
+  const [voiceDialog, setVoiceDialog] = useState(false);
 
   const [ttsAdapter, setTtsAdapter] = useState('');
   const [voice, setVoice] = useState('');
   const [voiceSpeed, setVoiceSpeed] = useState('1');
-
   const [promptText, setPromptText] = useState('');
 
   const [sceneDialog, setSceneDialog] = useState(false);
   const [pickScene, setPickScene] = useState('');
+
+  const applyConfig = useCallback((cfg: CharacterConfigDto) => {
+    setConfig(cfg);
+    setPickConv(cfg.conversation_adapter || '');
+    setPickOverride(cfg.conversation_model_override || '');
+    setPickAsr(cfg.asr_adapter || '');
+    setTtsAdapter(cfg.tts_adapter || '');
+    setVoice(cfg.voice || '');
+    setVoiceSpeed(String(cfg.voice_speed ?? 1));
+    setPromptText(cfg.prompt || '');
+    setPickScene(normalizeHdriSceneName(cfg.scene_name));
+  }, []);
 
   const notifyWeb = useCallback(() => {
     bridge.send({
@@ -145,103 +215,212 @@ export function SettingsScreen() {
   }, []);
 
   const loadCharacter = useCallback(async () => {
-    if (!userInfo.id || !selectedCharacterId) {
+    if (!userInfo.id || !activeCharacterId) {
       setConfig(null);
-      setLlmOptions([]);
+      setLlmAvailableProviders([]);
+      setAsrAvailableProviders([]);
+      setTtsAvailableProviders([]);
+      setConversationChoices([]);
+      setAsrChoices([]);
+      setTtsChoices([]);
+      setVoiceOptions([]);
       return;
     }
+
     setLoading(true);
     try {
-      const [cfg, llm] = await Promise.all([
-        fetchCharacterConfig(serverUrl, userInfo.id, selectedCharacterId),
+      const loadDashboardConfig = async () => {
+        try {
+          return await fetchDashboardCharacter(serverUrl, activeCharacterId);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          if (
+            userInfo.email &&
+            (message.includes('401') || message.includes('Unauthorized'))
+          ) {
+            const restored = await restoreDashboardSession(
+              serverUrl,
+              userInfo.email,
+            );
+            if (restored) {
+              return fetchDashboardCharacter(serverUrl, activeCharacterId);
+            }
+          }
+          return fetchCharacterConfig(
+            serverUrl,
+            userInfo.id,
+            activeCharacterId,
+          );
+        }
+      };
+
+      const [
+        cfg,
+        llm,
+        asr,
+        tts,
+        llmChoices,
+        speechChoices,
+        speechSynthesisChoices,
+      ] = await Promise.all([
+        loadDashboardConfig(),
         fetchAvailableLlm(serverUrl, userInfo.id),
+        fetchAvailableAsr(serverUrl, userInfo.id),
+        fetchAvailableTts(serverUrl, userInfo.id),
+        fetchConversationChoices(serverUrl),
+        fetchAsrChoices(serverUrl),
+        fetchTtsChoices(serverUrl),
       ]);
-      setConfig(cfg);
-      setLlmOptions(llm.options?.length ? llm.options : []);
-      setPickConv(cfg.conversation_adapter || '');
-      setPickOverride(cfg.conversation_model_override || '');
-      setTtsAdapter(cfg.tts_adapter || '');
-      setVoice(cfg.voice || '');
-      setVoiceSpeed(String(cfg.voice_speed ?? 1));
-      setPromptText(cfg.prompt || '');
-      setPickScene(cfg.scene_name || '');
-    } catch (e) {
+
+      applyConfig(cfg);
+      setLlmAvailableProviders(llm.options?.length ? llm.options : []);
+      setAsrAvailableProviders(asr.options?.length ? asr.options : []);
+      setTtsAvailableProviders(tts.options?.length ? tts.options : []);
+      setConversationChoices(
+        mergeChoicesWithCurrent(
+          llmChoices.choices?.length ? llmChoices.choices : [],
+          cfg.conversation_adapter,
+        ),
+      );
+      setAsrChoices(
+        mergeChoicesWithCurrent(
+          speechChoices.choices?.length ? speechChoices.choices : [],
+          cfg.asr_adapter,
+        ),
+      );
+      setTtsChoices(
+        mergeChoicesWithCurrent(
+          speechSynthesisChoices.choices?.length
+            ? speechSynthesisChoices.choices
+            : [],
+          cfg.tts_adapter,
+        ),
+      );
+    } catch (error) {
       Alert.alert(
-        'Load failed',
-        e instanceof Error ? e.message : 'Could not load character settings',
+        t('settings.alerts.loadFailedTitle'),
+        error instanceof Error
+          ? error.message
+          : t('settings.alerts.loadFailedMessage'),
       );
       setConfig(null);
     } finally {
       setLoading(false);
     }
-  }, [userInfo.id, selectedCharacterId, serverUrl]);
+  }, [
+    activeCharacterId,
+    applyConfig,
+    serverUrl,
+    t,
+    userInfo.email,
+    userInfo.id,
+  ]);
 
   useFocusEffect(
     useCallback(() => {
       void loadCharacter();
-    }, [loadCharacter]),
+      return () => {
+        dispatch(setSettingsCharacterId(null));
+      };
+    }, [dispatch, loadCharacter]),
   );
 
   const readOnly = config?.read_only === true;
 
-  const handleSaveUrl = () => {
-    const trimmed = editingUrl.trim().replace(/\/+$/, '');
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      dispatch(setServerUrl(trimmed));
-      setShowUrlDialog(false);
-    } else {
-      Alert.alert('Invalid URL', 'Server URL must start with http:// or https://');
-    }
-  };
-
-  const handleSaveCharacterAssetsUrl = () => {
-    const t = editingCharacterAssetsUrl.trim().replace(/\/+$/, '');
-    if (t.length === 0) {
-      dispatch(setCharacterAssetsBaseUrl(''));
-      setShowCharacterAssetsDialog(false);
+  useEffect(() => {
+    if (!ttsAdapter) {
+      setVoiceOptions([]);
       return;
     }
-    if (t.startsWith('http://') || t.startsWith('https://')) {
-      dispatch(setCharacterAssetsBaseUrl(t));
-      setShowCharacterAssetsDialog(false);
-    } else {
-      Alert.alert(
-        'Invalid URL',
-        'Must start with http:// or https://, or leave empty to use Server URL',
-      );
-    }
-  };
 
-  const handleSaveSceneAssetsUrl = () => {
-    const t = editingSceneAssetsUrl.trim().replace(/\/+$/, '');
-    if (t.length === 0) {
-      dispatch(setSceneAssetsBaseUrl(''));
-      setShowSceneAssetsDialog(false);
+    let cancelled = false;
+    setVoiceLoading(true);
+    fetchTtsVoiceNames(serverUrl, ttsAdapter)
+      .then(result => {
+        if (cancelled) {
+          return;
+        }
+        const options = Object.entries(result.voice_names ?? {}).map(
+          ([value, label]) => ({
+            value: String(value),
+            label: typeof label === 'string' ? label : String(value),
+          }),
+        );
+        setVoiceOptions(options);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setVoiceOptions([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setVoiceLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [serverUrl, ttsAdapter]);
+
+  useEffect(() => {
+    if (!config || readOnly || !activeCharacterId || !ttsAdapter) {
       return;
     }
-    if (t.startsWith('http://') || t.startsWith('https://')) {
-      dispatch(setSceneAssetsBaseUrl(t));
-      setShowSceneAssetsDialog(false);
-    } else {
-      Alert.alert(
-        'Invalid URL',
-        'Must start with http:// or https://, or leave empty to use Server URL',
-      );
+
+    const parsedSpeed = parseFloat(voiceSpeed);
+    if (!Number.isFinite(parsedSpeed)) {
+      return;
     }
-  };
+
+    const normalizedSpeed = clampSpeed(parsedSpeed);
+    if (
+      config.tts_adapter === ttsAdapter &&
+      config.voice === voice &&
+      Math.abs((config.voice_speed ?? 1) - normalizedSpeed) < 0.001
+    ) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void runSave('tts', () =>
+        patchDashboardCharacter(serverUrl, activeCharacterId, {
+          tts_adapter: ttsAdapter,
+          voice,
+          voice_speed: normalizedSpeed,
+        }),
+      );
+    }, 650);
+
+    return () => clearTimeout(timer);
+  }, [
+    activeCharacterId,
+    config,
+    readOnly,
+    serverUrl,
+    ttsAdapter,
+    voice,
+    voiceSpeed,
+  ]);
 
   const runSave = async (key: string, fn: () => Promise<unknown>) => {
-    if (!userInfo.id || !selectedCharacterId) return;
+    if (!userInfo.id || !activeCharacterId) {
+      return;
+    }
     setSaving(key);
     try {
       await fn();
       notifyWeb();
       await loadCharacter();
-      Alert.alert('Saved');
-    } catch (e) {
+      Alert.alert(t('common.saved'));
+    } catch (error) {
       Alert.alert(
-        'Error',
-        e instanceof Error ? e.message : 'Request failed',
+        t('common.error'),
+        error instanceof Error
+          ? error.message
+          : t('settings.alerts.requestFailed'),
       );
     } finally {
       setSaving(null);
@@ -250,569 +429,744 @@ export function SettingsScreen() {
 
   const handleSaveLlm = () =>
     runSave('llm', () =>
-      saveConversationSettings(
-        serverUrl,
-        userInfo.id,
-        selectedCharacterId!,
-        pickConv,
-        pickOverride,
-      ),
+      patchDashboardCharacter(serverUrl, activeCharacterId!, {
+        conversation_adapter: pickConv,
+        conversation_model_override: pickOverride,
+      }),
     );
 
   const handleSaveTts = () => {
-    const spd = parseFloat(voiceSpeed);
+    const parsedSpeed = clampSpeed(parseFloat(voiceSpeed));
     return runSave('tts', () =>
-      saveTtsSettings(
-        serverUrl,
-        userInfo.id,
-        selectedCharacterId!,
-        ttsAdapter,
+      patchDashboardCharacter(serverUrl, activeCharacterId!, {
+        tts_adapter: ttsAdapter,
         voice,
-        Number.isFinite(spd) ? spd : 1,
-      ),
+        voice_speed: Number.isFinite(parsedSpeed) ? parsedSpeed : 1,
+      }),
     );
   };
 
+  const adjustVoiceSpeed = (delta: number) => {
+    const current = Number.parseFloat(voiceSpeed);
+    const base = Number.isFinite(current) ? current : 1;
+    setVoiceSpeed(
+      clampSpeed(base + delta)
+        .toFixed(2)
+        .replace(/\.00$/, '.0'),
+    );
+  };
+
+  const selectVoiceSpeed = (value: number) => {
+    setVoiceSpeed(value.toFixed(2).replace(/\.00$/, '.0'));
+  };
+
+  const handleSaveAsr = () =>
+    runSave('asr', () =>
+      patchDashboardCharacter(serverUrl, activeCharacterId!, {
+        asr_adapter: pickAsr,
+      }),
+    );
+
   const handleSavePrompt = () =>
     runSave('prompt', () =>
-      savePrompt(serverUrl, userInfo.id, selectedCharacterId!, promptText),
+      patchDashboardCharacter(serverUrl, activeCharacterId!, {
+        prompt: promptText,
+      }),
     );
 
   const handleSaveScene = () =>
     runSave('scene', () =>
-      saveScene(serverUrl, userInfo.id, selectedCharacterId!, pickScene),
+      patchDashboardCharacter(serverUrl, activeCharacterId!, {
+        scene_name: pickScene,
+      }),
     );
+
+  const renderAdapterCards = (
+    options: string[],
+    selectedValue: string,
+    availableProviders: string[],
+    onSelect: (value: string) => void,
+    enabledLabel: string,
+  ) => {
+    if (options.length === 0) {
+      return null;
+    }
+
+    return (
+      <View style={styles.choiceStack}>
+        {options.map(option => {
+          const selected = selectedValue === option;
+          const available = isChoiceAvailable(option, availableProviders);
+          return (
+            <Pressable
+              key={option}
+              style={[
+                styles.optionCard,
+                {
+                  borderColor: selected
+                    ? theme.colors.primary
+                    : theme.colors.outline + '40',
+                  backgroundColor: theme.colors.surfaceVariant,
+                  opacity: available ? 1 : 0.48,
+                },
+              ]}
+              onPress={() => onSelect(option)}
+            >
+              <View style={styles.optionTextBlock}>
+                <Text
+                  style={[
+                    styles.optionTitle,
+                    { color: theme.colors.onSurface },
+                  ]}
+                >
+                  {option}
+                </Text>
+                <Text
+                  style={[
+                    styles.optionDescription,
+                    { color: theme.colors.onSurfaceVariant },
+                  ]}
+                >
+                  {getAvailabilityDescription(t, available, enabledLabel)}
+                </Text>
+              </View>
+              {selected ? (
+                <Chip {...paperChipFontScalingProps} compact>
+                  {t('common.selected')}
+                </Chip>
+              ) : null}
+            </Pressable>
+          );
+        })}
+      </View>
+    );
+  };
+
+  const compactListItemProps = {
+    ...paperListItemFontScalingProps,
+    style: styles.listItem,
+    contentStyle: styles.listItemContent,
+    titleStyle: [styles.listItemTitle, { color: theme.colors.onSurface }],
+    descriptionStyle: [
+      styles.listItemDescription,
+      { color: theme.colors.onSurface + '70' },
+    ],
+  } as const;
+
+  const compactSubheaderProps = {
+    ...paperSubheaderFontScalingProps,
+    style: [styles.sectionSubheader, { color: theme.colors.primary }],
+  } as const;
+
+  const denseTextInputProps = {
+    ...paperTextInputFontScalingProps,
+    dense: true,
+  } as const;
+
+  const compactActionButtonProps = {
+    ...paperButtonFontScalingProps,
+    compact: true,
+  } as const;
 
   return (
     <View
-      style={[
-        styles.screenRoot,
-        { backgroundColor: theme.colors.background },
-      ]}>
+      style={[styles.screenRoot, { backgroundColor: theme.colors.background }]}
+    >
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: Math.max(24, insets.bottom + 16) },
+          { paddingBottom: Math.max(16, insets.bottom + 12) },
         ]}
         keyboardShouldPersistTaps="handled"
-        nestedScrollEnabled
-        removeClippedSubviews={false}
-        showsVerticalScrollIndicator
-        persistentScrollbar={Platform.OS === 'android'}>
-        <View style={styles.buildBanner}>
-          <Text
-            style={[styles.buildBannerText, { color: theme.colors.primary }]}>
-            JS settings-ui v7 ·{' '}
-            {__DEV__ ? 'Metro 热更新' : '内置 bundle'}
-          </Text>
-        </View>
-      <List.Section>
-        <List.Subheader style={{ color: theme.colors.primary }}>Account</List.Subheader>
-        <List.Item
-          title={userInfo.username || 'Not logged in'}
-          description={userInfo.email || ''}
-          left={props => <List.Icon {...props} icon="account" />}
-          titleStyle={{ color: theme.colors.onSurface }}
-          descriptionStyle={{ color: theme.colors.onSurface + '70' }}
-        />
-      </List.Section>
-
-      <Divider />
-
-      <List.Section>
-        <List.Subheader style={{ color: theme.colors.primary }}>调试</List.Subheader>
-        <List.Item
-          title="日志 / 调试页"
-          description="在嵌入的 WebView 中打开简要说明页（调试用 Chrome/远程调试即可）"
-          left={props => <List.Icon {...props} icon="text-box-outline" />}
-          onPress={() => {
-            navigation.navigate('Home');
-            bridge.send({
-              type: 'webview:navigate',
-              payload: { path: '/debug' },
-            });
-          }}
-          titleStyle={{ color: theme.colors.onSurface }}
-          descriptionStyle={{ color: theme.colors.onSurface + '70' }}
-        />
-      </List.Section>
-
-      <Divider />
-
-      <List.Section>
-        <List.Subheader style={{ color: theme.colors.primary }}>Appearance</List.Subheader>
-        <List.Item
-          title="Dark Mode"
-          left={props => <List.Icon {...props} icon="theme-light-dark" />}
-          right={() => (
-            <Switch
-              value={appTheme === 'dark'}
-              onValueChange={(v: boolean) => {
-                const next = v ? 'dark' : 'light';
-                dispatch(setTheme(next));
-                bridge.send({
-                  type: 'theme:change',
-                  payload: { theme: next },
-                });
-              }}
-              color={theme.colors.primary}
+      >
+        {!activeCharacterId ? (
+          <List.Section style={styles.listSection}>
+            <List.Item
+              {...compactListItemProps}
+              title={t('settings.noCharacterSelectedTitle')}
+              description={t('settings.noCharacterSelectedDescription')}
+              left={props => <List.Icon {...props} icon="information" />}
             />
-          )}
-          titleStyle={{ color: theme.colors.onSurface }}
-        />
-        <List.Item
-          title="Language"
-          description={language === 'en' ? 'English' : '中文'}
-          left={props => <List.Icon {...props} icon="translate" />}
-          right={() => (
-            <Switch
-              value={language === 'zh'}
-              onValueChange={(v: boolean) => {
-                const lang = v ? 'zh' : 'en';
-                dispatch(setLanguage(lang));
-                bridge.send({
-                  type: 'language:change',
-                  payload: { lang },
-                });
-              }}
-              color={theme.colors.primary}
-            />
-          )}
-          titleStyle={{ color: theme.colors.onSurface }}
-          descriptionStyle={{ color: theme.colors.onSurface + '70' }}
-        />
-      </List.Section>
-
-      <Divider />
-
-      <List.Section>
-        <List.Subheader style={{ color: theme.colors.primary }}>Server</List.Subheader>
-        <List.Item
-          title="Server URL (API)"
-          description={serverUrl}
-          left={props => <List.Icon {...props} icon="server" />}
-          onPress={() => {
-            setEditingUrl(serverUrl);
-            setShowUrlDialog(true);
-          }}
-          titleStyle={{ color: theme.colors.onSurface }}
-          descriptionStyle={{ color: theme.colors.onSurface + '70' }}
-        />
-        <List.Item
-          title="角色模型资源根 URL"
-          description={
-            characterAssetsBaseUrl.length > 0
-              ? characterAssetsBaseUrl
-              : `默认与 API 相同 · ${serverUrl}`
-          }
-          left={props => <List.Icon {...props} icon="human" />}
-          onPress={() => {
-            setEditingCharacterAssetsUrl(characterAssetsBaseUrl);
-            setShowCharacterAssetsDialog(true);
-          }}
-          titleStyle={{ color: theme.colors.onSurface }}
-          descriptionStyle={{ color: theme.colors.onSurface + '70' }}
-        />
-        <List.Item
-          title="场景资源根 URL（地面 / HDR）"
-          description={
-            sceneAssetsBaseUrl.length > 0
-              ? sceneAssetsBaseUrl
-              : `默认与 API 相同 · ${serverUrl}`
-          }
-          left={props => <List.Icon {...props} icon="image-filter-hdr" />}
-          onPress={() => {
-            setEditingSceneAssetsUrl(sceneAssetsBaseUrl);
-            setShowSceneAssetsDialog(true);
-          }}
-          titleStyle={{ color: theme.colors.onSurface }}
-          descriptionStyle={{ color: theme.colors.onSurface + '70' }}
-        />
-      </List.Section>
-
-      <Divider />
-
-      <List.Section>
-        <List.Subheader style={{ color: theme.colors.primary }}>
-          Character settings
-        </List.Subheader>
-        {Platform.OS === 'android' && (
-          <>
-            <List.Subheader style={{ fontSize: 13, opacity: 0.85 }}>
-              3D 模型与场景缓存
-            </List.Subheader>
-            {nativeAssetDl.phase === 'idle' &&
-            nativeAssetDl.rows.length === 0 ? (
-              <List.Item
-                title="尚未开始拉取"
-                description="打开 Home 后会按静态资源地址下载；此处显示每个文件状态与总进度。"
-                left={props => <List.Icon {...props} icon="package-variant" />}
-                titleStyle={{ color: theme.colors.onSurface }}
-                descriptionStyle={{ color: theme.colors.onSurface + '70' }}
-              />
-            ) : (
-              <View style={styles.nativeAssetBlock}>
-                {(() => {
-                  const total = nativeAssetDl.rows.length;
-                  const done = nativeAssetDl.rows.filter(
-                    r => r.status === 'ok' || r.status === 'skipped',
-                  ).length;
-                  const pct = total > 0 ? done / total : 0;
-                  return (
-                    <>
-                      <Text
-                        style={{
-                          color: theme.colors.onSurface,
-                          marginBottom: 8,
-                          fontSize: 13,
-                        }}>
-                        {nativeAssetDl.phase === 'running'
-                          ? `拉取中 ${done}/${total}（404 会先 HEAD 快速跳过）`
-                          : nativeAssetDl.phase === 'error'
-                            ? `上次失败 ${done}/${total}`
-                            : `已完成 ${done}/${total}`}
-                      </Text>
-                      {total > 0 ? (
-                        <ProgressBar progress={pct} color={theme.colors.primary} />
-                      ) : null}
-                      {nativeAssetDl.errorMessage ? (
-                        <Text
-                          style={{
-                            color: theme.colors.error,
-                            marginTop: 8,
-                            fontSize: 12,
-                          }}>
-                          {nativeAssetDl.errorMessage}
-                        </Text>
-                      ) : null}
-                    </>
-                  );
-                })()}
-                <Text
-                  style={{
-                    color: theme.colors.primary,
-                    marginTop: 12,
-                    marginBottom: 4,
-                    fontSize: 12,
-                  }}>
-                  角色模型
-                </Text>
-                {nativeAssetDl.rows
-                  .filter(r => r.group === 'character')
-                  .map(row => (
-                    <List.Item
-                      key={row.rel}
-                      title={row.label}
-                      description={nativeAssetStatusDescription(row)}
-                      left={props => (
-                        <List.Icon
-                          {...props}
-                          icon={nativeAssetStatusIcon(row.status)}
-                        />
-                      )}
-                      titleStyle={{ color: theme.colors.onSurface }}
-                      descriptionStyle={{
-                        color: theme.colors.onSurface + '70',
-                      }}
-                    />
-                  ))}
-                <Text
-                  style={{
-                    color: theme.colors.primary,
-                    marginTop: 8,
-                    marginBottom: 4,
-                    fontSize: 12,
-                  }}>
-                  场景（地面 / HDR）
-                </Text>
-                {nativeAssetDl.rows
-                  .filter(r => r.group === 'scene')
-                  .map(row => (
-                    <List.Item
-                      key={row.rel}
-                      title={row.label}
-                      description={nativeAssetStatusDescription(row)}
-                      left={props => (
-                        <List.Icon
-                          {...props}
-                          icon={nativeAssetStatusIcon(row.status)}
-                        />
-                      )}
-                      titleStyle={{ color: theme.colors.onSurface }}
-                      descriptionStyle={{
-                        color: theme.colors.onSurface + '70',
-                      }}
-                    />
-                  ))}
-              </View>
-            )}
-            <Divider />
-          </>
-        )}
-        {!selectedCharacterId ? (
-          <List.Item
-            title="No character selected"
-            description="Open Chats and pick a conversation first."
-            left={props => <List.Icon {...props} icon="information" />}
-            titleStyle={{ color: theme.colors.onSurface }}
-          />
+          </List.Section>
         ) : loading ? (
           <View style={styles.centerPad}>
             <ActivityIndicator />
           </View>
         ) : config ? (
           <>
-            <List.Item
-              title={config.character_name}
-              description={readOnly ? 'Read-only template' : 'Active character'}
-              left={props => <List.Icon {...props} icon="account-circle" />}
-              titleStyle={{ color: theme.colors.onSurface }}
-            />
+            <List.Section style={styles.listSection}>
+              <List.Item
+                {...compactListItemProps}
+                title={config.character_name}
+                description={
+                  readOnly
+                    ? t('settings.readOnlyTemplate')
+                    : t('settings.activeCharacter')
+                }
+                left={props => <List.Icon {...props} icon="account-circle" />}
+              />
+            </List.Section>
 
-            <List.Item
-              title="LLM (conversation)"
-              description={`${pickConv || '—'}${pickOverride ? ` · ${pickOverride}` : ''}`}
-              left={props => <List.Icon {...props} icon="brain" />}
-              onPress={() => !readOnly && setLlmDialog(true)}
-              disabled={readOnly}
-              titleStyle={{ color: theme.colors.onSurface }}
-            />
-            {!readOnly && (
-              <View style={styles.rowBtn}>
-                <Button
-                  mode="contained-tonal"
-                  onPress={() => void handleSaveLlm()}
-                  disabled={saving !== null}
-                  loading={saving === 'llm'}>
-                  Save LLM
-                </Button>
+            <Divider />
+
+            <List.Section style={styles.listSection}>
+              <List.Subheader {...compactSubheaderProps}>
+                {t('settings.sections.characterSettings')}
+              </List.Subheader>
+
+              <List.Item
+                {...compactListItemProps}
+                title={t('settings.llmConversation')}
+                description={`${pickConv || '—'}${
+                  pickOverride ? ` · ${pickOverride}` : ''
+                }`}
+                descriptionNumberOfLines={1}
+                left={props => <List.Icon {...props} icon="brain" />}
+                onPress={() => !readOnly && setLlmDialog(true)}
+                disabled={readOnly}
+              />
+              {!readOnly ? (
+                <View style={styles.rowBtn}>
+                  <Button
+                    {...compactActionButtonProps}
+                    mode="contained-tonal"
+                    onPress={() => void handleSaveLlm()}
+                    disabled={saving !== null}
+                    loading={saving === 'llm'}
+                  >
+                    {t('settings.saveLlm')}
+                  </Button>
+                </View>
+              ) : null}
+
+              <List.Item
+                {...compactListItemProps}
+                title={t('settings.asrRecognition')}
+                description={pickAsr || '—'}
+                descriptionNumberOfLines={1}
+                left={props => (
+                  <List.Icon {...props} icon="microphone-message" />
+                )}
+                onPress={() => !readOnly && setAsrDialog(true)}
+                disabled={readOnly}
+              />
+              {!readOnly ? (
+                <View style={styles.rowBtn}>
+                  <Button
+                    {...compactActionButtonProps}
+                    mode="contained-tonal"
+                    onPress={() => void handleSaveAsr()}
+                    disabled={saving !== null}
+                    loading={saving === 'asr'}
+                  >
+                    {t('settings.saveAsr')}
+                  </Button>
+                </View>
+              ) : null}
+
+              <List.Subheader {...compactSubheaderProps}>
+                {t('settings.tts')}
+              </List.Subheader>
+              <List.Item
+                {...compactListItemProps}
+                title={t('settings.ttsAdapter')}
+                description={ttsAdapter || '—'}
+                descriptionNumberOfLines={1}
+                left={props => <List.Icon {...props} icon="speaker-multiple" />}
+                onPress={() => !readOnly && setTtsDialog(true)}
+                disabled={readOnly}
+              />
+              <List.Item
+                {...compactListItemProps}
+                title={t('settings.voice')}
+                description={voice ? getVoiceLabel(voiceOptions, voice) : '—'}
+                descriptionNumberOfLines={1}
+                left={props => <List.Icon {...props} icon="account-voice" />}
+                onPress={() => !readOnly && ttsAdapter && setVoiceDialog(true)}
+                disabled={readOnly || !ttsAdapter}
+              />
+              <View style={styles.pad}>
+                <Text
+                  style={[
+                    styles.speedHeading,
+                    { color: theme.colors.onSurface },
+                  ]}
+                >
+                  {t('settings.voiceSpeed')}:{' '}
+                  {clampSpeed(parseFloat(voiceSpeed) || 1).toFixed(1)}x
+                </Text>
+                <Text
+                  style={[
+                    styles.speedHint,
+                    { color: theme.colors.onSurfaceVariant },
+                  ]}
+                >
+                  {t('settings.voiceSpeedHint')}
+                </Text>
+                <View
+                  style={[
+                    styles.speedRail,
+                    { backgroundColor: theme.colors.surfaceVariant },
+                  ]}
+                >
+                  {SPEED_MARKS.map(mark => {
+                    const selected =
+                      Math.abs((parseFloat(voiceSpeed) || 1) - mark) < 0.001;
+                    return (
+                      <Pressable
+                        key={mark}
+                        onPress={() => selectVoiceSpeed(mark)}
+                        disabled={readOnly}
+                        style={[
+                          styles.speedMark,
+                          {
+                            backgroundColor: selected
+                              ? theme.colors.primary
+                              : theme.colors.background,
+                            borderColor: selected
+                              ? theme.colors.primary
+                              : theme.colors.outline + '50',
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.speedMarkLabel,
+                            {
+                              color: selected
+                                ? theme.colors.onPrimary
+                                : theme.colors.onSurface,
+                            },
+                          ]}
+                        >
+                          {mark
+                            .toFixed(mark % 1 === 0 ? 1 : 2)
+                            .replace(/0$/, '')}
+                          x
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <View style={styles.speedAdjustRow}>
+                  <Button
+                    {...paperButtonFontScalingProps}
+                    mode="outlined"
+                    compact
+                    onPress={() => adjustVoiceSpeed(-SPEED_STEP)}
+                    disabled={readOnly}
+                  >
+                    {t('settings.slower')}
+                  </Button>
+                  <View
+                    style={[
+                      styles.speedValuePill,
+                      { backgroundColor: theme.colors.surfaceVariant },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.speedValueText,
+                        { color: theme.colors.onSurface },
+                      ]}
+                    >
+                      {clampSpeed(parseFloat(voiceSpeed) || 1).toFixed(1)}x
+                    </Text>
+                  </View>
+                  <Button
+                    {...paperButtonFontScalingProps}
+                    mode="outlined"
+                    compact
+                    onPress={() => adjustVoiceSpeed(SPEED_STEP)}
+                    disabled={readOnly}
+                  >
+                    {t('settings.faster')}
+                  </Button>
+                </View>
+                {!readOnly ? (
+                  <Button
+                    {...compactActionButtonProps}
+                    mode="contained-tonal"
+                    style={styles.inputGap}
+                    onPress={() => void handleSaveTts()}
+                    disabled={saving !== null || !ttsAdapter}
+                    loading={saving === 'tts'}
+                  >
+                    {t('settings.saveTts')}
+                  </Button>
+                ) : null}
               </View>
-            )}
 
-            <List.Subheader>TTS</List.Subheader>
-            <View style={styles.pad}>
-              <TextInput
-                label="TTS adapter"
-                value={ttsAdapter}
-                onChangeText={setTtsAdapter}
-                mode="outlined"
-                dense
-                disabled={readOnly}
-              />
-              <TextInput
-                label="Voice"
-                value={voice}
-                onChangeText={setVoice}
-                mode="outlined"
-                dense
-                style={styles.inputGap}
-                disabled={readOnly}
-              />
-              <TextInput
-                label="Voice speed"
-                value={voiceSpeed}
-                onChangeText={setVoiceSpeed}
-                mode="outlined"
-                keyboardType="decimal-pad"
-                dense
-                style={styles.inputGap}
-                disabled={readOnly}
-              />
-              {!readOnly && (
-                <Button
-                  mode="contained-tonal"
-                  style={styles.inputGap}
-                  onPress={() => void handleSaveTts()}
-                  disabled={saving !== null}
-                  loading={saving === 'tts'}>
-                  Save TTS
-                </Button>
-              )}
-            </View>
-
-            <List.Subheader>Prompt</List.Subheader>
-            <View style={styles.pad}>
-              <TextInput
-                label="System prompt"
-                value={promptText}
-                onChangeText={setPromptText}
-                mode="outlined"
-                multiline
-                numberOfLines={6}
-                disabled={readOnly}
-              />
-              {!readOnly && (
-                <Button
-                  mode="contained-tonal"
-                  style={styles.inputGap}
-                  onPress={() => void handleSavePrompt()}
-                  disabled={saving !== null}
-                  loading={saving === 'prompt'}>
-                  Save prompt
-                </Button>
-              )}
-            </View>
-
-            <List.Item
-              title="Scene (HDRI)"
-              description={pickScene || '—'}
-              left={props => <List.Icon {...props} icon="image-filter-hdr" />}
-              onPress={() => !readOnly && setSceneDialog(true)}
-              disabled={readOnly}
-              titleStyle={{ color: theme.colors.onSurface }}
-            />
-            {!readOnly && (
-              <View style={styles.rowBtn}>
-                <Button
-                  mode="contained-tonal"
-                  onPress={() => void handleSaveScene()}
-                  disabled={saving !== null}
-                  loading={saving === 'scene'}>
-                  Save scene
-                </Button>
+              <List.Subheader {...compactSubheaderProps}>
+                {t('settings.prompt')}
+              </List.Subheader>
+              <View style={styles.pad}>
+                <TextInput
+                  {...paperTextInputFontScalingProps}
+                  label={t('settings.systemPrompt')}
+                  value={promptText}
+                  onChangeText={setPromptText}
+                  mode="outlined"
+                  multiline
+                  numberOfLines={5}
+                  disabled={readOnly}
+                />
+                {!readOnly ? (
+                  <Button
+                    {...compactActionButtonProps}
+                    mode="contained-tonal"
+                    style={styles.inputGap}
+                    onPress={() => void handleSavePrompt()}
+                    disabled={saving !== null}
+                    loading={saving === 'prompt'}
+                  >
+                    {t('settings.savePrompt')}
+                  </Button>
+                ) : null}
               </View>
-            )}
+
+              <List.Item
+                {...compactListItemProps}
+                title={t('settings.sceneHdri')}
+                description={pickScene ? getSceneLabel(t, pickScene) : '—'}
+                descriptionNumberOfLines={1}
+                left={props => <List.Icon {...props} icon="image-filter-hdr" />}
+                onPress={() => !readOnly && setSceneDialog(true)}
+                disabled={readOnly}
+              />
+              {!readOnly ? (
+                <View style={styles.rowBtn}>
+                  <Button
+                    {...compactActionButtonProps}
+                    mode="contained-tonal"
+                    onPress={() => void handleSaveScene()}
+                    disabled={saving !== null}
+                    loading={saving === 'scene'}
+                  >
+                    {t('settings.saveScene')}
+                  </Button>
+                </View>
+              ) : null}
+            </List.Section>
           </>
         ) : null}
-      </List.Section>
-
-      <Divider />
-
-      <View style={styles.footer}>
-        <Text style={[styles.version, { color: theme.colors.onSurface + '50' }]}>
-          DLP3D Android v0.1.0
-        </Text>
-        <Button
-          mode="outlined"
-          onPress={() => dispatch(logout())}
-          textColor={theme.colors.error}
-          style={[styles.logoutButton, { borderColor: theme.colors.error }]}
-          icon="logout">
-          Sign Out
-        </Button>
-      </View>
       </ScrollView>
 
       <Portal>
-        <Dialog visible={showUrlDialog} onDismiss={() => setShowUrlDialog(false)}>
-          <Dialog.Title>Change Server URL</Dialog.Title>
-          <Dialog.Content>
+        {llmDialog ? (
+          <BottomSheet
+            onClose={() => setLlmDialog(false)}
+            title={t('settings.dialogs.conversationModel')}
+            theme={theme}
+            closeLabel={t('common.done')}
+          >
+            {conversationChoices.length === 0 ? (
+              <Text>{t('settings.dialogs.noConversationChoices')}</Text>
+            ) : (
+              renderAdapterCards(
+                conversationChoices,
+                pickConv,
+                llmAvailableProviders,
+                setPickConv,
+                t('settings.dialogs.conversationModel'),
+              )
+            )}
             <TextInput
-              label="Server URL"
-              value={editingUrl}
-              onChangeText={setEditingUrl}
+              {...denseTextInputProps}
+              label={t('settings.dialogs.conversationAdapter')}
+              value={pickConv}
+              onChangeText={setPickConv}
               mode="outlined"
-              placeholder="https://your-server.com"
               autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
+              style={styles.inputGap}
             />
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setShowUrlDialog(false)}>Cancel</Button>
-            <Button onPress={handleSaveUrl}>Save</Button>
-          </Dialog.Actions>
-        </Dialog>
-
-        <Dialog
-          visible={showCharacterAssetsDialog}
-          onDismiss={() => setShowCharacterAssetsDialog(false)}>
-          <Dialog.Title>角色模型资源根 URL</Dialog.Title>
-          <Dialog.Content>
-            <Text style={{ marginBottom: 8, opacity: 0.75 }}>
-              需与站点上 public/characters/ 路径一致。留空则使用上方 API Server
-              URL。
+            <TextInput
+              {...denseTextInputProps}
+              label={t('settings.dialogs.modelOverrideOptional')}
+              value={pickOverride}
+              onChangeText={setPickOverride}
+              mode="outlined"
+              style={styles.inputGap}
+            />
+            <Text style={styles.sheetHint}>
+              {t('settings.dialogs.conversationAdapterHint')}
             </Text>
-            <TextInput
-              label="HTTPS 根地址"
-              value={editingCharacterAssetsUrl}
-              onChangeText={setEditingCharacterAssetsUrl}
-              mode="outlined"
-              placeholder="https://cdn.example.com"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-            />
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setShowCharacterAssetsDialog(false)}>
-              Cancel
-            </Button>
-            <Button onPress={handleSaveCharacterAssetsUrl}>Save</Button>
-          </Dialog.Actions>
-        </Dialog>
+          </BottomSheet>
+        ) : null}
 
-        <Dialog
-          visible={showSceneAssetsDialog}
-          onDismiss={() => setShowSceneAssetsDialog(false)}>
-          <Dialog.Title>场景资源根 URL</Dialog.Title>
-          <Dialog.Content>
-            <Text style={{ marginBottom: 8, opacity: 0.75 }}>
-              需包含 public/models/ground/ 与 public/img/hdr/。留空则使用 API
-              Server URL。
+        {asrDialog ? (
+          <BottomSheet
+            onClose={() => setAsrDialog(false)}
+            title={t('settings.dialogs.speechRecognition')}
+            theme={theme}
+            closeLabel={t('common.done')}
+          >
+            {asrChoices.length === 0 ? (
+              <Text>{t('settings.dialogs.noAsrChoices')}</Text>
+            ) : (
+              renderAdapterCards(
+                asrChoices,
+                pickAsr,
+                asrAvailableProviders,
+                setPickAsr,
+                t('settings.dialogs.speechRecognition'),
+              )
+            )}
+            <TextInput
+              {...denseTextInputProps}
+              label={t('settings.dialogs.asrAdapter')}
+              value={pickAsr}
+              onChangeText={setPickAsr}
+              mode="outlined"
+              autoCapitalize="none"
+              style={styles.inputGap}
+            />
+            <Text style={styles.sheetHint}>
+              {t('settings.dialogs.asrAdapterHint')}
             </Text>
-            <TextInput
-              label="HTTPS 根地址"
-              value={editingSceneAssetsUrl}
-              onChangeText={setEditingSceneAssetsUrl}
-              mode="outlined"
-              placeholder="https://assets.example.com"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
+          </BottomSheet>
+        ) : null}
+
+        {ttsDialog ? (
+          <BottomSheet
+            onClose={() => setTtsDialog(false)}
+            title={t('settings.chooseTtsAdapter')}
+            theme={theme}
+            closeLabel={t('common.done')}
+          >
+            {ttsChoices.length === 0 ? (
+              <Text>{t('settings.noTtsChoices')}</Text>
+            ) : (
+              <View style={styles.choiceStack}>
+                {ttsChoices.map(option => {
+                  const selected = ttsAdapter === option;
+                  const available = isChoiceAvailable(
+                    option,
+                    ttsAvailableProviders,
+                  );
+                  return (
+                    <Pressable
+                      key={option}
+                      style={[
+                        styles.optionCard,
+                        {
+                          borderColor: selected
+                            ? theme.colors.primary
+                            : theme.colors.outline + '40',
+                          backgroundColor: theme.colors.surfaceVariant,
+                          opacity: available ? 1 : 0.48,
+                        },
+                      ]}
+                      onPress={() => {
+                        setTtsAdapter(option);
+                        setVoice('');
+                      }}
+                    >
+                      <View style={styles.optionTextBlock}>
+                        <Text
+                          style={[
+                            styles.optionTitle,
+                            { color: theme.colors.onSurface },
+                          ]}
+                        >
+                          {option}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.optionDescription,
+                            { color: theme.colors.onSurfaceVariant },
+                          ]}
+                        >
+                          {available
+                            ? t('settings.chooseTtsAdapter')
+                            : t('settings.unavailable')}
+                        </Text>
+                      </View>
+                      {selected ? (
+                        <Chip {...paperChipFontScalingProps} compact>
+                          {t('common.selected')}
+                        </Chip>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+          </BottomSheet>
+        ) : null}
+
+        {voiceDialog ? (
+          <BottomSheet
+            onClose={() => setVoiceDialog(false)}
+            title={t('settings.chooseVoice')}
+            theme={theme}
+            closeLabel={t('common.done')}
+          >
+            {voiceLoading ? (
+              <View style={styles.centerPad}>
+                <ActivityIndicator />
+              </View>
+            ) : voiceOptions.length === 0 ? (
+              <>
+                <Text>{t('settings.noVoiceChoices')}</Text>
+                <TextInput
+                  {...denseTextInputProps}
+                  label={t('settings.manualVoice')}
+                  value={voice}
+                  onChangeText={setVoice}
+                  mode="outlined"
+                  autoCapitalize="none"
+                  style={styles.inputGap}
+                />
+              </>
+            ) : (
+              <View style={styles.choiceStack}>
+                {voiceOptions.map(option => {
+                  const selected = voice === option.value;
+                  return (
+                    <Pressable
+                      key={option.value}
+                      style={[
+                        styles.optionCard,
+                        {
+                          borderColor: selected
+                            ? theme.colors.primary
+                            : theme.colors.outline + '40',
+                          backgroundColor: theme.colors.surfaceVariant,
+                        },
+                      ]}
+                      onPress={() => setVoice(option.value)}
+                    >
+                      <View style={styles.optionTextBlock}>
+                        <Text
+                          style={[
+                            styles.optionTitle,
+                            { color: theme.colors.onSurface },
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.optionDescription,
+                            { color: theme.colors.onSurfaceVariant },
+                          ]}
+                        >
+                          {option.value}
+                        </Text>
+                      </View>
+                      {selected ? (
+                        <Chip {...paperChipFontScalingProps} compact>
+                          {t('common.selected')}
+                        </Chip>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+                <TextInput
+                  {...denseTextInputProps}
+                  label={t('settings.manualVoice')}
+                  value={voice}
+                  onChangeText={setVoice}
+                  mode="outlined"
+                  autoCapitalize="none"
+                />
+              </View>
+            )}
+          </BottomSheet>
+        ) : null}
+
+        {sceneDialog ? (
+          <View style={styles.sceneOverlay}>
+            <Pressable
+              style={styles.sceneBackdrop}
+              onPress={() => setSceneDialog(false)}
             />
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setShowSceneAssetsDialog(false)}>
-              Cancel
-            </Button>
-            <Button onPress={handleSaveSceneAssetsUrl}>Save</Button>
-          </Dialog.Actions>
-        </Dialog>
+            <View
+              style={[
+                styles.sceneSheet,
+                { backgroundColor: theme.colors.surface },
+              ]}
+            >
+              <View style={styles.sceneSheetHeader}>
+                <Text
+                  style={[
+                    styles.sceneSheetTitle,
+                    { color: theme.colors.onSurface },
+                  ]}
+                >
+                  {t('settings.dialogs.scene')}
+                </Text>
+                <Button
+                  {...paperButtonFontScalingProps}
+                  compact
+                  onPress={() => setSceneDialog(false)}
+                >
+                  {t('common.done')}
+                </Button>
+              </View>
 
-        <Dialog visible={llmDialog} onDismiss={() => setLlmDialog(false)}>
-          <Dialog.Title>Conversation model</Dialog.Title>
-          <Dialog.Content>
-            <ScrollView style={{ maxHeight: 320 }}>
-              {llmOptions.length === 0 ? (
-                <Text>No LLM options from server</Text>
-              ) : (
-                <RadioButton.Group value={pickConv} onValueChange={setPickConv}>
-                  {llmOptions.map(opt => (
-                    <RadioButton.Item key={opt} label={opt} value={opt} />
-                  ))}
-                </RadioButton.Group>
-              )}
-              <TextInput
-                label="Model override (optional)"
-                value={pickOverride}
-                onChangeText={setPickOverride}
-                mode="outlined"
-                style={{ marginTop: 12 }}
-              />
-            </ScrollView>
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setLlmDialog(false)}>Done</Button>
-          </Dialog.Actions>
-        </Dialog>
-
-        <Dialog visible={sceneDialog} onDismiss={() => setSceneDialog(false)}>
-          <Dialog.Title>Scene</Dialog.Title>
-          <Dialog.Content>
-            <ScrollView style={{ maxHeight: 360 }}>
-              <RadioButton.Group value={pickScene} onValueChange={setPickScene}>
-                {HDRI_SCENE_NAMES.map(name => (
-                  <RadioButton.Item key={name} label={name} value={name} />
-                ))}
-              </RadioButton.Group>
-            </ScrollView>
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setSceneDialog(false)}>Done</Button>
-          </Dialog.Actions>
-        </Dialog>
+              <ScrollView
+                style={styles.sceneGridScroll}
+                contentContainerStyle={styles.sceneGrid}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
+                {HDRI_SCENE_NAMES.map(name => {
+                  const selected = pickScene === name;
+                  const previewUri = resolveHdriPreviewUri(name);
+                  const sceneLabel = getSceneLabel(t, name);
+                  return (
+                    <Pressable
+                      key={name}
+                      onPress={() => setPickScene(name)}
+                      style={[
+                        styles.sceneCard,
+                        {
+                          backgroundColor: theme.colors.surfaceVariant,
+                          borderColor: selected
+                            ? theme.colors.primary
+                            : theme.colors.outline + '40',
+                        },
+                      ]}
+                    >
+                      {previewUri ? (
+                        <Image
+                          source={{ uri: previewUri }}
+                          style={styles.scenePreview}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View
+                          style={[
+                            styles.scenePreviewFallback,
+                            { backgroundColor: theme.colors.outline + '20' },
+                          ]}
+                        />
+                      )}
+                      <View style={styles.sceneCardFooter}>
+                        <Text
+                          style={[
+                            styles.sceneCardLabel,
+                            {
+                              color: selected
+                                ? theme.colors.primary
+                                : theme.colors.onSurface,
+                            },
+                          ]}
+                          numberOfLines={2}
+                        >
+                          {sceneLabel}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        ) : null}
       </Portal>
     </View>
   );
@@ -826,43 +1180,216 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {},
-  buildBanner: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+  listSection: {
+    marginVertical: 2,
   },
-  buildBannerText: {
+  sectionSubheader: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 4,
     fontSize: 12,
-    fontWeight: '600',
+    lineHeight: 16,
+  },
+  listItem: {
+    minHeight: 54,
+    paddingVertical: 0,
+  },
+  listItemContent: {
+    paddingVertical: 3,
+  },
+  listItemTitle: {
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  listItemDescription: {
+    fontSize: 11,
+    lineHeight: 15,
   },
   centerPad: {
     padding: 24,
     alignItems: 'center',
   },
-  nativeAssetBlock: {
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
   pad: {
     paddingHorizontal: 16,
-    paddingBottom: 8,
+    paddingBottom: 6,
   },
   inputGap: {
-    marginTop: 8,
+    marginTop: 6,
   },
   rowBtn: {
     paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(6, 7, 16, 0.66)',
+  },
+  sheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 8,
+    paddingBottom: 6,
+    minHeight: '38%',
+    maxHeight: '78%',
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+  },
+  sheetTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  sheetScroll: {
+    maxHeight: 560,
+  },
+  sheetScrollContent: {
+    paddingHorizontal: 12,
     paddingBottom: 12,
   },
-  footer: {
-    padding: 24,
-    alignItems: 'center',
-    gap: 16,
-  },
-  version: {
+  sheetHint: {
+    marginTop: 6,
     fontSize: 12,
+    lineHeight: 16,
+    opacity: 0.75,
   },
-  logoutButton: {
-    width: '100%',
+  choiceStack: {
+    gap: 8,
+    paddingBottom: 6,
+  },
+  optionCard: {
+    borderWidth: 1.5,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  optionTextBlock: {
+    flex: 1,
+    gap: 4,
+  },
+  optionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  optionDescription: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  speedHeading: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  speedHint: {
+    fontSize: 11,
+    marginBottom: 8,
+  },
+  speedRail: {
+    borderRadius: 18,
+    padding: 8,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  speedMark: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  speedMarkLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  speedAdjustRow: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  speedValuePill: {
+    minWidth: 64,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  speedValueText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  sceneOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  sceneBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(6, 7, 16, 0.76)',
+  },
+  sceneSheet: {
+    borderRadius: 18,
+    paddingTop: 8,
+    paddingBottom: 4,
+    overflow: 'hidden',
+    maxHeight: '72%',
+  },
+  sceneSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+  },
+  sceneSheetTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  sceneGridScroll: {
+    maxHeight: 520,
+  },
+  sceneGrid: {
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  sceneCard: {
+    width: '48%',
     borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+  },
+  scenePreview: {
+    width: '100%',
+    aspectRatio: 1.36,
+  },
+  scenePreviewFallback: {
+    width: '100%',
+    aspectRatio: 1.36,
+  },
+  sceneCardFooter: {
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    minHeight: 50,
+    justifyContent: 'center',
+  },
+  sceneCardLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 17,
   },
 });

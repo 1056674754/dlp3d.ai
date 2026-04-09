@@ -54,7 +54,18 @@ export class RoamingCamera extends BABYLON.ArcRotateCamera {
     this.keysLeft.push(65)
     this.keysRight.push(68)
     const canvas = document.getElementById('canvas') as HTMLCanvasElement
-    this.scene.activeCamera!.attachControl(canvas, true)
+    const isAndroidEmbedded =
+      typeof window !== 'undefined' &&
+      ((window as Window & { __DLP3D_EMBEDDED_IN_RN__?: boolean })
+        .__DLP3D_EMBEDDED_IN_RN__ === true ||
+        !!(window as Window & { ReactNativeWebView?: unknown })
+          .ReactNativeWebView) &&
+      /Android/i.test(navigator.userAgent)
+    if (isAndroidEmbedded) {
+      canvas.style.touchAction = 'none'
+      canvas.style.overscrollBehavior = 'none'
+    }
+    this.scene.activeCamera!.attachControl(canvas, !isAndroidEmbedded)
 
     const node = new BABYLON.TransformNode('cameraGroup', scene)
     this.parent = node

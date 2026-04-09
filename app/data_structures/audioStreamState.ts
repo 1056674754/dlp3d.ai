@@ -24,6 +24,8 @@ export enum AudioRecordState {
 export enum StreamedAudioEvents {
   /** Event fired when the recording state changes. */
   RECORD_STATE = 'recordState',
+  /** Event fired when the live microphone level changes. */
+  MIC_LEVEL = 'micLevel',
 }
 
 /**
@@ -34,6 +36,8 @@ export enum StreamedAudioEvents {
 export interface StreamedAudioEventPayloads {
   /** Payload for the record state change event. */
   recordState: AudioRecordState
+  /** Payload for the microphone level change event. */
+  micLevel: number
 }
 
 /**
@@ -46,6 +50,8 @@ export interface StreamedAudioEventPayloads {
 export interface AudioStreamState {
   /** Current recording state of the microphone. */
   recordState: AudioRecordState
+  /** Smoothed microphone level for UI feedback, normalized to 0-1. */
+  micLevel: number
   /**
    * Start microphone recording.
    *
@@ -78,4 +84,18 @@ export interface AudioStreamState {
    * @returns void
    */
   offRecordStateChange: (cb: (state: AudioRecordState) => void) => void
+  /**
+   * Subscribe to microphone level changes.
+   *
+   * @param cb Callback invoked with the latest normalized microphone level.
+   * @returns void
+   */
+  onMicLevelChange: (cb: (level: number) => void) => void
+  /**
+   * Unsubscribe from microphone level changes.
+   *
+   * @param cb The previously registered callback to remove.
+   * @returns void
+   */
+  offMicLevelChange: (cb: (level: number) => void) => void
 }

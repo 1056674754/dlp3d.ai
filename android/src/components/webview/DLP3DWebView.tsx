@@ -17,6 +17,7 @@ import { WebView, WebViewNavigation } from 'react-native-webview';
 import { useTheme, Button } from 'react-native-paper';
 import { useSelector, useDispatch } from 'react-redux';
 import type { RootState } from '@/store';
+import { pushDebugLog } from '@/store/debugLogStore';
 import {
   downloadStarted,
   setNativeAssetRow,
@@ -36,6 +37,7 @@ import {
   recordStartupMetric,
   resetStartupMetrics,
 } from '@/utils/startupProfiler';
+import { paperButtonFontScalingProps } from '@/theme/fontScaling';
 
 const LOCAL_WEB_BASE =
   Platform.OS === 'android'
@@ -47,6 +49,11 @@ export interface DLP3DWebViewProps {
   /** 若已登录，可注入给 Web 端；未接 Redux 时可不传 */
   authToken?: string;
   userInfo?: { username: string; email: string; id: string };
+  /** RN 登录态：在 document 前写入 `dlp3d_auth_state`，与 Web Authenticator 结构一致 */
+  webviewAuth?: {
+    isLogin: boolean;
+    userInfo: { username: string; email: string; id: string };
+  };
   language: 'en' | 'zh';
   theme: 'light' | 'dark';
   onReady?: () => void;
@@ -61,6 +68,7 @@ export interface DLP3DWebViewProps {
 export function DLP3DWebView({
   serverUrl,
   authToken,
+  webviewAuth,
   language,
   theme: appTheme,
   onReady,
@@ -71,6 +79,7 @@ export function DLP3DWebView({
   const paperTheme = useTheme();
   const webViewRef = useRef<WebView>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sourceOverride, setSourceOverride] = useState<string | null>(null);
   const canGoBackRef = useRef(false);
   const [androidAssets, setAndroidAssets] =
     useState<NativeAssetManifest | null>(null);
@@ -181,36 +190,44 @@ export function DLP3DWebView({
     };
   }, [nativeAssetOptions, nativeAssetProgress, dispatch]);
 
+  const selectedCharacterId = useSelector(
+    (state: RootState) => state.chat.selectedCharacterId,
+  );
+
+  useEffect(() => {
+    setSourceOverride(null);
+  }, [selectedCharacterId]);
+
   const webSource = useMemo(() => {
+    if (sourceOverride) return { uri: sourceOverride };
     if (Platform.OS === 'android') {
+      const params = selectedCharacterId
+        ? `?character_id=${encodeURIComponent(selectedCharacterId)}`
+        : '';
+
       if (remoteEmbedAfterFileError) {
         const u = serverUrl.trim().replace(/\/+$/, '');
         return { uri: `${u}/` };
       }
-      return { uri: `${LOCAL_WEB_BASE}/index.html` };
+      return { uri: `${LOCAL_WEB_BASE}/babylon.html${params}` };
     }
     return { uri: serverUrl };
-  }, [serverUrl, remoteEmbedAfterFileError]);
+  }, [
+    serverUrl,
+    remoteEmbedAfterFileError,
+    sourceOverride,
+    selectedCharacterId,
+  ]);
 
   const envOverrideJS = useMemo(() => {
-    const orchestratorHost =
-      configuredServerUrl.replace(/^https?:\/\//, '').split(':')[0] ||
-      '127.0.0.1';
-    const orchestratorPort =
-      configuredServerUrl
-        .replace(/^https?:\/\//, '')
-        .split(':')
-        .pop()
-        ?.match(/\d+/)?.[0] || '18002';
-    const backendHost =
-      serverUrl.replace(/^https?:\/\//, '').split(':')[0] || '127.0.0.1';
-    const backendPort =
-      serverUrl
-        .replace(/^https?:\/\//, '')
-        .split(':')
-        .pop()
-        ?.match(/\d+/)?.[0] || '18001';
+    // Use __SAME_ORIGIN__ sentinel so buildPrefixUrl in ky.ts
+    // constructs the full URL from window.location.origin at runtime.
+    // For file:// WebView we override the origin via a patched buildPrefixUrl
+    // that checks __DLP3D_SERVER_ORIGIN__ first.
     const normalizedServerUrl = serverUrl.trim().replace(/\/+$/, '');
+    const normalizedConfiguredUrl = configuredServerUrl
+      .trim()
+      .replace(/\/+$/, '');
     const normalizedCharacterAssetsBaseUrl = (
       characterAssetsBaseUrl || normalizedServerUrl
     )
@@ -223,14 +240,16 @@ export function DLP3DWebView({
       .replace(/\/+$/, '');
     return `
       window.__DLP3D_ENV__ = window.__DLP3D_ENV__ || {};
-      window.__DLP3D_ENV__.NEXT_PUBLIC_ORCHESTRATOR_HOST = '${orchestratorHost}';
-      window.__DLP3D_ENV__.NEXT_PUBLIC_ORCHESTRATOR_PORT = '${orchestratorPort}';
+      window.__DLP3D_ENV__.NEXT_PUBLIC_ORCHESTRATOR_HOST = '__SAME_ORIGIN__';
+      window.__DLP3D_ENV__.NEXT_PUBLIC_ORCHESTRATOR_PORT = '';
       window.__DLP3D_ENV__.NEXT_PUBLIC_ORCHESTRATOR_PATH_PREFIX = '/api/v4';
       window.__DLP3D_ENV__.NEXT_PUBLIC_ORCHESTRATOR_TIMEOUT = '10';
-      window.__DLP3D_ENV__.NEXT_PUBLIC_BACKEND_HOST = '${backendHost}';
-      window.__DLP3D_ENV__.NEXT_PUBLIC_BACKEND_PORT = '${backendPort}';
+      window.__DLP3D_ENV__.NEXT_PUBLIC_BACKEND_HOST = '__SAME_ORIGIN__';
+      window.__DLP3D_ENV__.NEXT_PUBLIC_BACKEND_PORT = '';
       window.__DLP3D_ENV__.NEXT_PUBLIC_BACKEND_PATH_PREFIX = '/api/v1';
       window.__DLP3D_ENV__.NEXT_PUBLIC_LANGUAGE = '${language}';
+      window.__DLP3D_SERVER_ORIGIN__ = '${normalizedServerUrl}';
+      window.__DLP3D_ORCHESTRATOR_ORIGIN__ = '${normalizedConfiguredUrl}';
       window.__DLP3D_REMOTE_CHARACTER_ASSET_BASE__ = '${normalizedCharacterAssetsBaseUrl}';
       window.__DLP3D_REMOTE_SCENE_ASSET_BASE__ = '${normalizedSceneAssetsBaseUrl}';
     `;
@@ -255,6 +274,23 @@ export function DLP3DWebView({
     [authToken, serverUrl, language, appTheme, envOverrideJS],
   );
 
+  const authPreludeForWeb = useMemo(() => {
+    if (!webviewAuth?.isLogin || !webviewAuth.userInfo?.id) {
+      return '';
+    }
+    const payload = JSON.stringify({
+      isLogin: true,
+      userInfo: {
+        username: webviewAuth.userInfo.username,
+        email: webviewAuth.userInfo.email,
+        id: webviewAuth.userInfo.id,
+      },
+    });
+    return `(function(){try{localStorage.setItem('dlp3d_auth_state',${JSON.stringify(
+      payload,
+    )});}catch(e){}})();`;
+  }, [webviewAuth]);
+
   const injectedJavaScriptBeforeContentLoaded = useMemo(() => {
     if (Platform.OS !== 'android') {
       return undefined;
@@ -274,9 +310,11 @@ export function DLP3DWebView({
           if (meta) {
             meta.setAttribute('content', viewportContent);
           }
-          document.documentElement.style.width = '100%';
-          document.documentElement.style.height = '100%';
-          document.documentElement.style.overflow = 'hidden';
+          if (document.documentElement) {
+            document.documentElement.style.width = '100%';
+            document.documentElement.style.height = '100%';
+            document.documentElement.style.overflow = 'hidden';
+          }
           if (document.body) {
             document.body.style.width = '100%';
             document.body.style.height = '100%';
@@ -288,16 +326,15 @@ export function DLP3DWebView({
         document.addEventListener('DOMContentLoaded', applyEmbeddedViewport);
       })();
     `;
-    if (!androidAssets) {
-      return prelude + 'true;';
+    const parts = [prelude, envOverrideJS, authPreludeForWeb];
+    if (androidAssets) {
+      parts.push(
+        'window.__DLP3D_NATIVE_ASSETS__=' + JSON.stringify(androidAssets) + ';',
+      );
     }
-    return (
-      prelude +
-      'window.__DLP3D_NATIVE_ASSETS__=' +
-      JSON.stringify(androidAssets) +
-      ';true;'
-    );
-  }, [androidAssets]);
+    parts.push('true;');
+    return parts.join('\n');
+  }, [androidAssets, authPreludeForWeb, envOverrideJS]);
 
   const setWebViewRef = useCallback((instance: WebView | null) => {
     webViewRef.current = instance;
@@ -369,15 +406,21 @@ export function DLP3DWebView({
   useEffect(() => {
     const unsubReady = bridge.on('ready', () => {
       logStartupEvent('webview.bridge-ready');
+      pushDebugLog('bridge', 'WebView bridge ready');
       onReady?.();
     });
 
     const unsubError = bridge.on('error', (payload: unknown) => {
       const { message, code } = payload as { message: string; code?: string };
+      pushDebugLog('error', `[${code || 'ERR'}] ${message?.slice(0, 150)}`);
       if (code === 'WEBGL_LOST') {
         setTimeout(() => {
           webViewRef.current?.reload();
         }, 3000);
+        return;
+      }
+      if (code === 'UNHANDLED_REJECTION' || code === 'JS_ERROR') {
+        console.warn(`[WebView ${code}] ${message}`);
         return;
       }
       setError(message);
@@ -390,14 +433,32 @@ export function DLP3DWebView({
         progress?: number;
         text?: string;
       };
+      const pct = progress != null ? Math.round(progress * 100) + '%' : '';
+      pushDebugLog(
+        'web',
+        `loading ${isLoading ? '⏳' : '✅'} ${pct} ${text || ''}`,
+      );
       onLoadingChange?.(isLoading, progress, text);
     });
 
     const unsubStartupMetric = bridge.on('startup:metric', payload => {
-      recordStartupMetric(
-        'web',
-        payload as { stage: string; elapsedMs: number },
-      );
+      const p = payload as { stage: string; elapsedMs: number };
+      pushDebugLog('perf', `${p.stage} ${Math.round(p.elapsedMs)}ms`);
+      recordStartupMetric('web', p);
+    });
+
+    const unsubDebugLog = bridge.on('debug:log', payload => {
+      const p = payload as { level?: string; message?: string };
+      const level = p.level || 'log';
+      const message = p.message || '';
+      pushDebugLog('web', `[${level}] ${message.slice(0, 240)}`);
+      if (level === 'error') {
+        console.error(`[WebViewConsole ${level}] ${message}`);
+      } else if (level === 'warn') {
+        console.warn(`[WebViewConsole ${level}] ${message}`);
+      } else {
+        console.log(`[WebViewConsole ${level}] ${message}`);
+      }
     });
 
     return () => {
@@ -405,12 +466,19 @@ export function DLP3DWebView({
       unsubError();
       unsubLoading();
       unsubStartupMetric();
+      unsubDebugLog();
     };
   }, [onReady, onError, onLoadingChange]);
 
   const handleNavigationStateChange = useCallback(
     (navState: { canGoBack?: boolean; url?: string }) => {
       canGoBackRef.current = navState.canGoBack ?? false;
+      if (navState.url) {
+        pushDebugLog(
+          'rn',
+          `navigate → ${navState.url.replace(/.*\/web\//, '/')}`,
+        );
+      }
     },
     [],
   );
@@ -433,7 +501,52 @@ export function DLP3DWebView({
 
   const handleMessage = useCallback(
     (event: { nativeEvent: { data: string } }) => {
-      bridge.handleMessage(event.nativeEvent.data);
+      const raw = event.nativeEvent.data;
+      try {
+        const parsed = JSON.parse(raw);
+        const t = parsed?.type || '?';
+        const p = parsed?.payload;
+        if (t.startsWith('startup:')) {
+          const stage = p?.stage || '';
+          const ms =
+            p?.elapsedMs != null ? ` ${Math.round(p.elapsedMs)}ms` : '';
+          pushDebugLog('perf', `${stage}${ms}`);
+        } else if (t === 'loading:state') {
+          const pct =
+            p?.progress != null ? ` ${Math.round(p.progress * 100)}%` : '';
+          const txt = p?.text || '';
+          pushDebugLog(
+            'web',
+            `loading ${p?.isLoading ? 'ON' : 'OFF'}${pct} ${txt}`,
+          );
+        } else if (t === 'webview:navigate') {
+          const navUrl = p?.url;
+          if (navUrl) {
+            pushDebugLog('nav', `→ ${navUrl}`);
+            setSourceOverride(navUrl);
+          }
+        } else if (t === 'error') {
+          pushDebugLog(
+            'error',
+            `${p?.code || ''} ${p?.message || raw.slice(0, 120)}`,
+          );
+        } else if (t === 'debug:log') {
+          pushDebugLog(
+            'web',
+            `[${p?.level || 'log'}] ${String(p?.message || '').slice(0, 240)}`,
+          );
+        } else if (t === 'chat:list:updated') {
+          pushDebugLog(
+            'bridge',
+            `chat:list:updated chats=${p?.chats?.length ?? '?'}`,
+          );
+        } else {
+          pushDebugLog('bridge', `${t} ${JSON.stringify(p).slice(0, 100)}`);
+        }
+      } catch {
+        /* not JSON */
+      }
+      bridge.handleMessage(raw);
     },
     [],
   );
@@ -507,6 +620,7 @@ export function DLP3DWebView({
             {error}
           </Text>
           <Button
+            {...paperButtonFontScalingProps}
             mode="contained"
             onPress={handleReload}
             style={styles.retryButton}
@@ -540,7 +654,7 @@ export function DLP3DWebView({
           mediaPlaybackRequiresUserAction={false}
           sharedCookiesEnabled
           thirdPartyCookiesEnabled
-          webviewDebuggingEnabled={__DEV__}
+          webviewDebuggingEnabled
           renderLoading={renderLoading}
           startInLoadingState
           androidLayerType="hardware"

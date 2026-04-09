@@ -94,6 +94,10 @@ export class OrchestratorClient {
    * Response type.
    */
   private _responseType: 'leave' | 'failed' | 'normal' | null = 'normal'
+  /**
+   * Whether the server has sent an explicit response-type signal.
+   */
+  private _responseSignalReceived: boolean = false
 
   /**
    * Stream data processing failure.
@@ -505,6 +509,34 @@ export class OrchestratorClient {
   }
 
   /**
+   * Get a lightweight snapshot of stream readiness counters for diagnostics.
+   */
+  public getReadinessSnapshot(): Record<string, unknown> {
+    return {
+      responseType: this._responseType,
+      responseSignalReceived: this._responseSignalReceived,
+      failureOnStreaming: this._failureOnStreaming,
+      runningLoopFailed: this._runningLoopFailed,
+      audioDuration: this._audioDuration,
+      audioReadySeconds: this._audioReadySeconds,
+      faceNFrames: this._faceNFrames,
+      faceReadyNFrames: this._faceReadyNFrames,
+      motionNFrames: this._motionNFrames,
+      motionReadyNFrames: this._motionReadyNFrames,
+      audioEnded: this._audioStream?.endRecvTime !== null,
+      faceEnded: this._faceStream?.endRecvTime !== null,
+      motionEnded: this._motionStream?.endRecvTime !== null,
+      hasAudioStream: this._audioStream !== null,
+      hasFaceStream: this._faceStream !== null,
+      hasMotionStream: this._motionStream !== null,
+      audioParamsReady:
+        this._audioNChannels !== null &&
+        this._audioSampleWidth !== null &&
+        this._audioFrameRate !== null,
+    }
+  }
+
+  /**
    * Get audio PCM data.
    *
    * Retrieves all available PCM audio data from the audio queue.
@@ -622,6 +654,13 @@ export class OrchestratorClient {
   }
 
   /**
+   * Whether the server has sent an explicit response-type signal.
+   */
+  public get hasReceivedResponseSignal(): boolean {
+    return this._responseSignalReceived
+  }
+
+  /**
    * Process received message.
    *
    * Parses protobuf message and executes corresponding processing logic based on message type.
@@ -643,10 +682,12 @@ export class OrchestratorClient {
 
     switch (className) {
       case 'NormalResponse':
+        this._responseSignalReceived = true
         this._responseType = 'normal'
         Logger.debug(`Received signal of response type normal`)
         return true
       case 'FailedResponse':
+        this._responseSignalReceived = true
         reason = pbResponse.message
         if (this._responseType === 'normal') {
           this._failureOnStreaming = true
@@ -655,6 +696,7 @@ export class OrchestratorClient {
         Logger.error(`Received failure signal, reason: ${reason}`)
         return false
       case 'LeaveResponse':
+        this._responseSignalReceived = true
         this._responseType = 'leave'
         return false
       case 'AudioChunkStart':

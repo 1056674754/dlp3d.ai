@@ -115,6 +115,7 @@
     "softsugar": "SOFTSUGAR",
     "sensenova": "SENSENOVA",
     "openai_realtime": "OPENAI",
+    "qwen_realtime_asr": "ALIBABA BAILIAN REALTIME ASR",
     "elevenlabs": "ELEVENLABS",
     "chatterbox": "CHATTERBOX",
     "modifiedVoice": "Modified Voice",

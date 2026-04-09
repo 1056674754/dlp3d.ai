@@ -24,10 +24,32 @@ import {
   PROVIDER_REGISTRY,
   getSuggestedModels,
   type ProviderCategory,
+  type ProviderAdapterOption,
 } from '@/lib/providers/registry'
 import { ArrowLeft, Save, Loader2 } from 'lucide-react'
 
 const NONE_VALUE = '__none__'
+type LlmFeature = 'conversation' | 'reaction' | 'memory' | 'classification'
+type AdapterChoice = { adapterId: string; label: string; providerId: string }
+
+function normalizeAdapterOptions(
+  providerId: string,
+  fallbackLabel: string,
+  options?: ProviderAdapterOption[],
+  defaultAdapterId?: string,
+): AdapterChoice[] {
+  if (options && options.length > 0) {
+    return options.map(option => ({
+      adapterId: option.adapterId,
+      label: option.labelZh || option.label || fallbackLabel,
+      providerId,
+    }))
+  }
+  if (!defaultAdapterId) {
+    return []
+  }
+  return [{ adapterId: defaultAdapterId, label: fallbackLabel, providerId }]
+}
 
 export default function CharacterSettings() {
   const params = useParams()
@@ -46,6 +68,8 @@ export default function CharacterSettings() {
     voice: '',
     voice_speed: 1.0,
     asr_adapter: '',
+    classification_adapter: '',
+    classification_model_override: '',
     conversation_adapter: '',
     conversation_model_override: '',
     reaction_adapter: '',
@@ -70,6 +94,8 @@ export default function CharacterSettings() {
         voice: character.voice || '',
         voice_speed: character.voice_speed ?? 1.0,
         asr_adapter: character.asr_adapter || '',
+        classification_adapter: character.classification_adapter || '',
+        classification_model_override: character.classification_model_override || '',
         conversation_adapter: character.conversation_adapter || '',
         conversation_model_override: character.conversation_model_override || '',
         reaction_adapter: character.reaction_adapter || '',
@@ -96,6 +122,8 @@ export default function CharacterSettings() {
         voice: form.voice || '',
         voice_speed: form.voice_speed,
         asr_adapter: form.asr_adapter || '',
+        classification_adapter: form.classification_adapter || '',
+        classification_model_override: form.classification_model_override || '',
         conversation_adapter: form.conversation_adapter || '',
         conversation_model_override: form.conversation_model_override || '',
         reaction_adapter: form.reaction_adapter || '',
@@ -116,34 +144,92 @@ export default function CharacterSettings() {
 
   const getAdaptersForCategory = useCallback(
     (category: ProviderCategory) => {
-      const adapters: { adapterId: string; label: string; providerId: string }[] = []
+      const adapters: AdapterChoice[] = []
       for (const pid of configuredProviderIds) {
         const p = PROVIDER_REGISTRY[pid]
-        const aid = p?.adapterIds[category]
-        if (aid) {
-          adapters.push({ adapterId: aid, label: p.labelZh, providerId: pid })
-        }
+        if (!p) continue
+        adapters.push(
+          ...normalizeAdapterOptions(
+            pid,
+            p.labelZh,
+            p.adapterOptions?.[category],
+            p.adapterIds[category],
+          ),
+        )
+      }
+      return []
+    },
+    [configuredProviderIds],
+  )
+
+  const getLlmAdaptersForFeature = useCallback(
+    (feature: LlmFeature) => {
+      const adapters: AdapterChoice[] = []
+      for (const pid of configuredProviderIds) {
+        const p = PROVIDER_REGISTRY[pid]
+        if (!p) continue
+        adapters.push(
+          ...normalizeAdapterOptions(
+            pid,
+            p.labelZh,
+            p.llmFeatureAdapterOptions?.[feature],
+            p.llmFeatureAdapters?.[feature] ?? p.adapterIds.llm,
+          ),
+        )
       }
       return adapters
     },
     [configuredProviderIds],
   )
 
+  const providerSupportsAdapter = useCallback(
+    (providerId: string, adapterId: string, category: ProviderCategory) => {
+      const provider = PROVIDER_REGISTRY[providerId]
+      if (!provider) {
+        return false
+      }
+      if (provider.adapterIds[category] === adapterId) {
+        return true
+      }
+      if (
+        (provider.adapterOptions?.[category] ?? []).some(
+          option => option.adapterId === adapterId,
+        )
+      ) {
+        return true
+      }
+      if (
+        category === 'llm' &&
+        (Object.values(provider.llmFeatureAdapters ?? {}).includes(adapterId) ||
+          Object.values(provider.llmFeatureAdapterOptions ?? {}).some(options =>
+            (options ?? []).some(option => option.adapterId === adapterId),
+          ))
+      ) {
+        return true
+      }
+      return false
+    },
+    [],
+  )
+
   const getModelsForAdapter = useCallback(
     (adapterId: string, category: ProviderCategory) => {
       for (const p of Object.values(PROVIDER_REGISTRY)) {
-        if (p.adapterIds[category] === adapterId) {
+        if (providerSupportsAdapter(p.id, adapterId, category)) {
           return getSuggestedModels(p.id, category)
         }
       }
       return []
     },
-    [],
+    [providerSupportsAdapter],
   )
 
   const ttsAdapters = getAdaptersForCategory('tts')
-  const llmAdapters = getAdaptersForCategory('llm')
   const asrAdapters = getAdaptersForCategory('asr')
+  const conversationLlmAdapters = getLlmAdaptersForFeature('conversation')
+  const reactionLlmAdapters = getLlmAdaptersForFeature('reaction')
+  const memoryLlmAdapters = getLlmAdaptersForFeature('memory')
+  const classificationLlmAdapters = getLlmAdaptersForFeature('classification')
 
   if (!character) {
     return (
@@ -248,7 +334,7 @@ export default function CharacterSettings() {
             <AdapterSelect
               label="对话 LLM"
               value={form.conversation_adapter}
-              items={llmAdapters}
+              items={conversationLlmAdapters}
               onChange={v => update('conversation_adapter', v)}
             />
             <div className="space-y-2">
@@ -266,7 +352,7 @@ export default function CharacterSettings() {
             <AdapterSelect
               label="Reaction 分析 LLM"
               value={form.reaction_adapter}
-              items={llmAdapters}
+              items={reactionLlmAdapters}
               onChange={v => update('reaction_adapter', v)}
             />
             <div className="space-y-2">
@@ -284,7 +370,7 @@ export default function CharacterSettings() {
             <AdapterSelect
               label="Memory LLM"
               value={form.memory_adapter}
-              items={llmAdapters}
+              items={memoryLlmAdapters}
               onChange={v => update('memory_adapter', v)}
             />
             <div className="space-y-2">
@@ -293,6 +379,24 @@ export default function CharacterSettings() {
                 value={form.memory_model_override}
                 onChange={v => update('memory_model_override', v)}
                 suggestions={getModelsForAdapter(form.memory_adapter, 'llm')}
+                placeholder="选择推荐模型或自定义输入..."
+              />
+            </div>
+
+            <Separator />
+
+            <AdapterSelect
+              label="Classification LLM"
+              value={form.classification_adapter}
+              items={classificationLlmAdapters}
+              onChange={v => update('classification_adapter', v)}
+            />
+            <div className="space-y-2">
+              <Label>Classification 模型</Label>
+              <ModelSelect
+                value={form.classification_model_override}
+                onChange={v => update('classification_model_override', v)}
+                suggestions={getModelsForAdapter(form.classification_adapter, 'llm')}
                 placeholder="选择推荐模型或自定义输入..."
               />
             </div>

@@ -5,34 +5,43 @@ import SceneLayout from '../layouts/scene'
 import Navigation from '../components/layout/Navigation'
 import AuthGuard from '../components/auth/AuthGuard'
 import ScreenshotOverlay from '../components/ui/ScreenshotOverlay'
+import MobileConversationHUD from '../components/native/MobileConversationHUD'
 import { CssBaseline, ThemeProvider } from '@mui/material'
 import appTheme from '@/themes/theme'
 import '@/styles/components.css'
 import { useDispatch } from 'react-redux'
+import { useSelector } from 'react-redux'
 import { setAuthState, loadAuthStateFromStorage } from '@/features/auth/authStore'
 import { setIsChatStarting } from '@/features/chat/chat'
+import { isNativeApp } from '@/utils/nativeBridge'
+import { getIsLogin } from '@/features/auth/authStore'
+import { usePromptingSettings } from '@/hooks/usePromptingSettings'
 
-/**
- * Homepage 3D scene component.
- *
- * This component renders the interactive 3D scene powered by Babylon.js,
- * including authentication guard, navigation, and screenshot overlay functionality.
- * It handles character ID retrieval from URL parameters or localStorage.
- */
 export default function BabylonPage() {
   const dispatch = useDispatch()
+  const isLogin = useSelector(getIsLogin)
+  const { loadUserCharacters } = usePromptingSettings()
   const [showScreenshotOverlay, setShowScreenshotOverlay] = useState(true)
   const [characterId, setCharacterId] = useState<string | null>(null)
+  const [native] = useState(() => isNativeApp())
 
-  // Initialize auth state from localStorage
   useEffect(() => {
     dispatch(setAuthState(loadAuthStateFromStorage()))
   }, [dispatch])
 
-  // Hide chat list in babylon page (new tab)
   useEffect(() => {
     dispatch(setIsChatStarting(true))
   }, [dispatch])
+
+  useEffect(() => {
+    if (!isLogin) {
+      return
+    }
+    void loadUserCharacters()
+    // `loadUserCharacters` is recreated by the hook; we only want to prime
+    // chat data when login state becomes available on this page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLogin])
 
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
 
@@ -41,15 +50,14 @@ export default function BabylonPage() {
     setCurrentSessionId(sessionId)
   }, [])
 
-  // Get character ID from URL parameters or localStorage
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search)
     const characterIdFromUrl = urlParams.get('character_id')
 
     if (characterIdFromUrl) {
+      localStorage.setItem('dlp_selected_character_id', characterIdFromUrl)
       setCharacterId(characterIdFromUrl)
     } else {
-      // Fallback to localStorage if available
       const storedCharacterId = localStorage.getItem('dlp_selected_character_id')
       if (storedCharacterId) {
         setCharacterId(storedCharacterId)
@@ -57,11 +65,6 @@ export default function BabylonPage() {
     }
   }, [])
 
-  /**
-   * Handle screenshot overlay close event.
-   *
-   * Hides the screenshot overlay when the user closes it.
-   */
   const handleScreenshotOverlayClose = () => {
     setShowScreenshotOverlay(false)
   }
@@ -69,15 +72,15 @@ export default function BabylonPage() {
   return (
     <ThemeProvider theme={appTheme}>
       <CssBaseline enableColorScheme />
-      <Navigation />
+      {!native && <Navigation />}
       <AuthGuard redirectTo="/">
         <BabylonJSProvider characterId={characterId}>
           <SceneLayout />
+          <MobileConversationHUD />
         </BabylonJSProvider>
       </AuthGuard>
 
-      {/* Screenshot Overlay */}
-      {showScreenshotOverlay && (
+      {showScreenshotOverlay && !native && (
         <ScreenshotOverlay
           onClose={handleScreenshotOverlayClose}
           sessionId={currentSessionId}

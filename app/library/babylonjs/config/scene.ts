@@ -29,6 +29,34 @@ export interface SceneConfig {
 }
 
 /**
+ * Shared skybox presentation tuning.
+ *
+ * The browser preview has always relied on a blurred skybox to hide equirectangular
+ * sampling artifacts, especially on stylized backgrounds like Cyber Black. Keeping
+ * these values shared prevents Android and browser from drifting apart visually.
+ */
+export const SKYBOX_BLUR_LEVEL = 0.8
+export const SKYBOX_Y_ROTATION_DEGREES = 15
+export const SKYBOX_ENVIRONMENT_INTENSITY = 0.9
+export const ANDROID_RUNTIME_SKYBOX_BLUR_LEVEL = 0.88
+export const ANDROID_RUNTIME_CYBER_BLACK_SKYBOX_BLUR_LEVEL = 0.95
+
+/**
+ * Android runtime needs a slightly heavier blur than the browser preview.
+ *
+ * Cyber Black is only 1920x1080 and shows blockiness very easily once the chat
+ * camera pushes closer to the character, so we smooth that scene a bit more
+ * aggressively without touching the other HDRIs.
+ */
+export function getAndroidRuntimeSkyboxBlur(hdriFileName: string): number {
+  if (hdriFileName === 'hdr-cyber_black.png') {
+    return ANDROID_RUNTIME_CYBER_BLACK_SKYBOX_BLUR_LEVEL
+  }
+
+  return ANDROID_RUNTIME_SKYBOX_BLUR_LEVEL
+}
+
+/**
  * Available HDRi scenes with matching ground models.
  *
  * Contains predefined scene configurations for different 3D environments,
