@@ -202,6 +202,23 @@ export default async function onSceneReady(globalState: GlobalState) {
   const characterIdOverride = await resolveInitialCharacterId(userIdResult.id)
   Logger.log(`Character ID injection result: characterId: ${characterIdOverride}`)
   await seedSceneIndexForCharacter(userIdResult.id, characterIdOverride)
+  let conversationAdapter = ''
+  if (characterIdOverride) {
+    try {
+      const character = await getCharacterConfig(
+        userIdResult.id,
+        characterIdOverride,
+      )
+      conversationAdapter = character.conversation_adapter || ''
+      Logger.log(
+        `Character conversation adapter resolved: ${conversationAdapter || '(empty)'}`,
+      )
+    } catch (error) {
+      Logger.warn(
+        `Failed to read conversation adapter for character ${characterIdOverride}: ${error}`,
+      )
+    }
+  }
 
   // Additional logging for character ID debugging
   if (characterIdOverride) {
@@ -217,6 +234,7 @@ export default async function onSceneReady(globalState: GlobalState) {
   const configSync = new ConfigSync()
   configSync.setItem('userId', userIdResult.id)
   configSync.setItem('characterId', characterIdOverride)
+  configSync.setItem('conversationAdapter', conversationAdapter)
 
   const assetManagerCfg = {
     type: 'AssetManager',

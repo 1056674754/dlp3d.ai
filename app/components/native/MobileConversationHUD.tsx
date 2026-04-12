@@ -89,11 +89,11 @@ function getDescriptor(args: {
   if (isPressing) {
     return {
       phase: 'pressing',
-      statusLabel: 'HOLD',
-      eyebrow: 'Hold To Talk',
-      title: '继续按住即可开口',
-      hint: '短按不发送，按住说完再松开。',
-      accent: '#ffd47a',
+      statusLabel: 'REC',
+      eyebrow: 'Listening',
+      title: '正在开始聆听',
+      hint: '继续说，松开后发送，本轮内容会立即开始处理。',
+      accent: '#ff8da1',
     }
   }
 
@@ -426,7 +426,7 @@ export default function MobileConversationHUD() {
   }
 
   const buttonLabel =
-    descriptor.phase === 'recording'
+    descriptor.phase === 'recording' || descriptor.phase === 'pressing'
       ? '松开'
       : canInterrupt
         ? '打断'
@@ -437,7 +437,7 @@ export default function MobileConversationHUD() {
             : '说话'
 
   const buttonGlyph =
-    descriptor.phase === 'recording'
+    descriptor.phase === 'recording' || descriptor.phase === 'pressing'
       ? '●'
       : canInterrupt
         ? '×'
@@ -446,7 +446,7 @@ export default function MobileConversationHUD() {
           : '🎤'
 
   const androidButtonLabel =
-    descriptor.phase === 'recording'
+    descriptor.phase === 'recording' || descriptor.phase === 'pressing'
       ? '松开'
       : canInterrupt
         ? '打断'
@@ -457,7 +457,7 @@ export default function MobileConversationHUD() {
             : '说话'
 
   const androidButtonGlyph =
-    descriptor.phase === 'recording'
+    descriptor.phase === 'recording' || descriptor.phase === 'pressing'
       ? '●'
       : canInterrupt
         ? '×'
@@ -469,7 +469,8 @@ export default function MobileConversationHUD() {
 
   const buttonClassName = [
     styles.actionButton,
-    descriptor.phase === 'recording' && styles.actionButtonRecording,
+    (descriptor.phase === 'recording' || descriptor.phase === 'pressing') &&
+      styles.actionButtonRecording,
     descriptor.phase === 'ready' && styles.actionButtonReady,
     canInterrupt && styles.actionButtonInterrupt,
     isPressing && styles.actionButtonPressed,
@@ -481,7 +482,8 @@ export default function MobileConversationHUD() {
 
   const androidButtonClassName = [
     styles.floatingActionButton,
-    descriptor.phase === 'recording' && styles.floatingActionButtonRecording,
+    (descriptor.phase === 'recording' || descriptor.phase === 'pressing') &&
+      styles.floatingActionButtonRecording,
     descriptor.phase === 'ready' && styles.floatingActionButtonReady,
     canInterrupt && styles.floatingActionButtonInterrupt,
     isPressing && styles.floatingActionButtonPressed,
@@ -497,7 +499,10 @@ export default function MobileConversationHUD() {
     descriptor.phase === 'booting' ||
     descriptor.phase === 'thinking' ||
     descriptor.phase === 'speaking'
-  const recordingMicLevel = descriptor.phase === 'recording' ? micLevel : 0
+  const recordingMicLevel =
+    descriptor.phase === 'recording' || descriptor.phase === 'pressing'
+      ? micLevel
+      : 0
 
   const buttonDisabled = !canInterrupt && !canHoldToTalk
 
@@ -516,7 +521,11 @@ export default function MobileConversationHUD() {
               <div
                 className={`${styles.statusGlow} ${
                   statusAnimated ? styles.statusGlowActive : ''
-                } ${descriptor.phase === 'recording' ? styles.statusGlowLive : ''}`}
+                } ${
+                  descriptor.phase === 'recording' || descriptor.phase === 'pressing'
+                    ? styles.statusGlowLive
+                    : ''
+                }`}
               />
               <div className={styles.androidStatusLabel}>
                 {descriptor.statusLabel}
@@ -581,6 +590,7 @@ export default function MobileConversationHUD() {
                 <span
                   className={`${styles.pulseDot} ${
                     descriptor.phase === 'recording' ||
+                    descriptor.phase === 'pressing' ||
                     descriptor.phase === 'thinking' ||
                     descriptor.phase === 'speaking'
                       ? styles.pulseActive

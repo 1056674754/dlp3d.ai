@@ -6,6 +6,7 @@ export async function GET() {
     label: p.label,
     labelZh: p.labelZh,
     categories: p.categories,
+    docsUrl: p.docsUrl ?? null,
     mongoKeys: p.mongoKeys.map(k => ({
       field: k.field,
       label: k.label,

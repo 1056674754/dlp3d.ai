@@ -52,6 +52,8 @@ export interface AudioStreamState {
   recordState: AudioRecordState
   /** Smoothed microphone level for UI feedback, normalized to 0-1. */
   micLevel: number
+  /** Actual sample rate exposed by the current AudioContext, if known. */
+  sampleRate: number | null
   /**
    * Start microphone recording.
    *

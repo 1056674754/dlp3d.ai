@@ -48,6 +48,7 @@ export async function GET() {
     return {
       id: p.id,
       configured: configuredSet.includes(p.id),
+      docsUrl: p.docsUrl ?? null,
       values: fields,
     }
   })

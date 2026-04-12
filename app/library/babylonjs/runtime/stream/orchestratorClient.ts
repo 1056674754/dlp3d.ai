@@ -386,10 +386,13 @@ export class OrchestratorClient {
         Logger.error('Request ID not received yet.')
         return
       }
-      if (this._orchestratorPath.includes('chat')) {
+      if (this._orchestratorPath.includes('with_audio_llm')) {
+        // Realtime audio-conversation DAGs do not emit the legacy NormalResponse
+        // envelope. Treat the request-id handshake as the response signal so the
+        // frontend state machine does not wait for a message that never arrives.
         this._responseType = 'normal'
-      } else if (this._orchestratorPath.includes('with_audio_llm')) {
-        // If calling audio LLM to generate actor animation interface, default response_type is normal
+        this._responseSignalReceived = true
+      } else if (this._orchestratorPath.includes('chat')) {
         this._responseType = 'normal'
       }
     }
@@ -880,6 +883,10 @@ export class OrchestratorClient {
         break
       case 'RequestIDResponse':
         this._requestId = pbResponse.requestId
+        if (this._orchestratorPath.includes('audio_chat_with_audio_llm')) {
+          this._responseType = 'normal'
+          this._responseSignalReceived = true
+        }
         this.onRequestIDChangedObservable.notifyObservers(this._requestId)
         Logger.debug(`Received request ID: ${pbResponse.requestId}`)
         break

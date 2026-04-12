@@ -32,6 +32,7 @@ export interface CharacterConfig {
   modelIndex: number;
   createdAt: string;
   updatedAt: string;
+  wakeWord?: string;
 }
 
 // ─── WebView → Native ──────────────────────────────────────────
@@ -60,7 +61,8 @@ export type WebViewToNativeEvent =
         chats: CharacterConfig[];
         selectedCharacterId?: string | null;
       };
-    };
+    }
+  | { type: 'voice:resumeListening'; payload: Record<string, never> };
 
 // ─── Native → WebView ──────────────────────────────────────────
 
@@ -80,4 +82,7 @@ export type NativeToWebViewEvent =
   | { type: 'scene:select'; payload: { sceneIndex: number } }
   | { type: 'chat:requestNew'; payload: { modelIndex?: number } }
   | { type: 'assets:manifest'; payload: NativeAssetManifest }
-  | { type: 'face:position'; payload: { x: number; y: number } };
+  | { type: 'face:position'; payload: { x: number; y: number } }
+  | { type: 'voice:wake'; payload: { keyword: string; confidence: number } }
+  | { type: 'audio:pcm'; payload: { data: string } }
+  | { type: 'audio:vad'; payload: { state: 'speech' | 'silence' } };

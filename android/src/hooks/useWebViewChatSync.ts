@@ -35,6 +35,7 @@ function mergeConfigIntoChat(
     avatarModelName: config.avatar ?? chat.avatarModelName,
     readOnly: config.read_only,
     createdAt: config.create_datatime ?? chat.createdAt,
+    wakeWord: config.wake_word || chat.wakeWord,
   };
 }
 
@@ -52,6 +53,7 @@ function dashboardCharacterToChat(
     modelIndex: 1,
     createdAt: config.create_datatime || '',
     updatedAt: '',
+    wakeWord: config.wake_word || '',
   };
 }
 

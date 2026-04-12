@@ -21,6 +21,7 @@ const ALLOWED_FIELDS = [
   'reaction_model_override',
   'memory_adapter',
   'memory_model_override',
+  'wake_word',
 ] as const
 
 export async function GET(_request: NextRequest, ctx: RouteContext) {
@@ -59,6 +60,7 @@ export async function GET(_request: NextRequest, ctx: RouteContext) {
     reaction_model_override: doc.reaction_model_override ?? '',
     memory_adapter: doc.memory_adapter ?? '',
     memory_model_override: doc.memory_model_override ?? '',
+    wake_word: doc.wake_word ?? '',
     read_only: doc.read_only ?? false,
     create_datatime: doc.create_datatime ?? '',
   })

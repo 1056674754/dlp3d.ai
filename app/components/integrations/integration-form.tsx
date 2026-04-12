@@ -69,7 +69,22 @@ export function ProviderForm({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>配置 {provider.labelZh}</DialogTitle>
-          <DialogDescription>填写 {provider.label} 所需的凭证信息</DialogDescription>
+          <DialogDescription>
+            填写 {provider.label} 所需的凭证信息
+            {config?.docsUrl && (
+              <>
+                {' · '}
+                <a
+                  href={config.docsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-4"
+                >
+                  官方文档
+                </a>
+              </>
+            )}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">

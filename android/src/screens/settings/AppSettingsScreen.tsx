@@ -26,10 +26,12 @@ import {
   setSceneAssetsBaseUrl,
   setDebugMode,
 } from '@/store/appSlice';
+import { setWakeWordKeywords } from '@/store/wakeWordSlice';
 import { logout } from '@/store/authSlice';
 import { bridge } from '@/bridge/WebViewBridge';
 import { useTranslation } from 'react-i18next';
 import { logoutDashboardSession } from '@/services/api';
+import { useWakeWord } from '@/hooks/useWakeWord';
 import {
   paperButtonFontScalingProps,
   paperListItemFontScalingProps,
@@ -102,6 +104,18 @@ export function AppSettingsScreen() {
   );
   const userInfo = useSelector((state: RootState) => state.auth.userInfo);
   const debugMode = useSelector((state: RootState) => state.app.debugMode);
+
+  const {
+    isEnabled: wakeWordEnabled,
+    isListening: wakeWordListening,
+    modelLoaded: wakeWordModelLoaded,
+    error: wakeWordError,
+    keywords: wakeWordKeywords,
+    toggleWakeWord,
+  } = useWakeWord();
+
+  const [editingWakeWords, setEditingWakeWords] = useState(wakeWordKeywords.join('\n'));
+  const [showWakeWordDialog, setShowWakeWordDialog] = useState(false);
 
   const [showUrlDialog, setShowUrlDialog] = useState(false);
   const [editingUrl, setEditingUrl] = useState(serverUrl);
@@ -306,6 +320,62 @@ export function AppSettingsScreen() {
               />
             )}
           />
+        </List.Section>
+
+        <Divider />
+
+        <List.Section style={styles.listSection}>
+          <List.Subheader {...compactSubheaderProps}>
+            {t('settings.sections.voice')}
+          </List.Subheader>
+          <List.Item
+            {...compactListItemProps}
+            title={t('settings.wakeWordTitle')}
+            description={
+              wakeWordEnabled
+                ? wakeWordListening
+                  ? t('settings.wakeWordListening')
+                  : wakeWordModelLoaded
+                    ? t('settings.wakeWordModelReady')
+                    : t('settings.wakeWordModelLoading')
+                : t('settings.wakeWordDescription')
+            }
+            left={props => <List.Icon {...props} icon="microphone" />}
+            right={() => (
+              <Switch
+                value={wakeWordEnabled}
+                onValueChange={toggleWakeWord}
+                color={theme.colors.primary}
+              />
+            )}
+          />
+          {wakeWordEnabled && (
+            <List.Item
+              {...compactListItemProps}
+              title={t('settings.wakeWordKeywordsTitle')}
+              description={`${t('settings.wakeWordFallbackDescription')} ${wakeWordKeywords.join('、')}`}
+              descriptionNumberOfLines={2}
+              left={props => (
+                <List.Icon {...props} icon="text-to-speech" />
+              )}
+              onPress={() => {
+                setEditingWakeWords(wakeWordKeywords.join('\n'));
+                setShowWakeWordDialog(true);
+              }}
+            />
+          )}
+          {wakeWordError && (
+            <Text
+              style={{
+                color: theme.colors.error,
+                fontSize: 11,
+                paddingHorizontal: 16,
+                marginTop: 4,
+              }}
+            >
+              {wakeWordError}
+            </Text>
+          )}
         </List.Section>
 
         <Divider />
@@ -570,6 +640,52 @@ export function AppSettingsScreen() {
             <Button
               {...paperButtonFontScalingProps}
               onPress={handleSaveCharacterAssetsUrl}
+            >
+              {t('common.save')}
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog
+          visible={showWakeWordDialog}
+          onDismiss={() => setShowWakeWordDialog(false)}
+        >
+          <Dialog.Title>{t('settings.wakeWordKeywordsTitle')}</Dialog.Title>
+          <Dialog.Content>
+            <Text style={{ marginBottom: 8, opacity: 0.75 }}>
+              {t('settings.wakeWordKeywordsHint')}
+            </Text>
+            <TextInput
+              {...denseDialogInputProps}
+              value={editingWakeWords}
+              onChangeText={setEditingWakeWords}
+              mode="outlined"
+              multiline
+              numberOfLines={4}
+              placeholder="你好小智"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button
+              {...paperButtonFontScalingProps}
+              onPress={() => setShowWakeWordDialog(false)}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              {...paperButtonFontScalingProps}
+              onPress={() => {
+                const newKeywords = editingWakeWords
+                  .split('\n')
+                  .map(k => k.trim())
+                  .filter(k => k.length > 0);
+                if (newKeywords.length > 0) {
+                  dispatch(setWakeWordKeywords(newKeywords));
+                }
+                setShowWakeWordDialog(false);
+              }}
             >
               {t('common.save')}
             </Button>

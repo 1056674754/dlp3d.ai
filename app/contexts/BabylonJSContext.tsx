@@ -20,6 +20,10 @@ import { AudioRecordState } from '@/data_structures/audioStreamState'
 import { WebSocketConnectionState } from '@/data_structures/webSocketState'
 import * as orchestrator_v4 from '@/library/babylonjs/runtime/io/orchestrator_v4_pb'
 import { uint8Array2ArrayBuffer } from '@/library/babylonjs/utils/array'
+import {
+  Conditions,
+  ConditionedMessage,
+} from '@/library/babylonjs/runtime/fsm/conditions'
 
 /**
  * React context carrying BabylonJS canvas ref and global state.
@@ -53,14 +57,25 @@ function BabylonJSProvider({
   const [isSceneInitialized, setIsSceneInitialized] = useState(false)
 
   // Add PCM queue to store audio data when websocket is not ready
-  const pcmQueue = useRef<ArrayBuffer[]>([])
+  type QueuedPCMChunk = {
+    buffer: ArrayBuffer
+    durationSeconds: number
+  }
+  const pcmQueue = useRef<QueuedPCMChunk[]>([])
   const isFlushingQueue = useRef(false)
   const currentFlushPromise = useRef<Promise<void> | null>(null)
   const isUserStreamingRef = useRef<boolean>(false)
+  /**
+   * Pre-stream buffer for native PCM chunks that arrive while isUserStreaming
+   * is still false (WebSocket still connecting).  Flushed into sendOrQueuePCM
+   * the moment streaming starts so no audio from the beginning of the utterance
+   * is lost.
+   */
+  const preStreamPcmBuffer = useRef<QueuedPCMChunk[]>([])
   const havokWasmBlobUrlRef = useRef<string | null>(null)
-  const recentPcmBufferRef = useRef<Array<{ buffer: ArrayBuffer; level: number }>>(
-    [],
-  )
+  const recentPcmBufferRef = useRef<
+    Array<{ buffer: ArrayBuffer; level: number; durationSeconds: number }>
+  >([])
   const currentUtteranceStatsRef = useRef({
     chunkCount: 0,
     prebufferedChunkCount: 0,
@@ -81,7 +96,9 @@ function BabylonJSProvider({
   const useHavokPhysics =
     typeof window !== 'undefined' &&
     (window.location.protocol !== 'file:' || isEmbeddedAndroidAssetWebView)
-  const maxRecentPcmChunks = 48
+  // Retain a modest rolling window of PCM so we can preserve the start of speech
+  // without flooding realtime backends with a large burst on connect.
+  const maxRecentPcmChunks = 128
 
   const createHavokModuleConfig = async () => {
     if (!isEmbeddedAndroidAssetWebView) {
@@ -124,8 +141,12 @@ function BabylonJSProvider({
     }
   }
 
-  const appendRecentPcmBuffer = (buffer: ArrayBuffer, level: number) => {
-    recentPcmBufferRef.current.push({ buffer, level })
+  const appendRecentPcmBuffer = (
+    buffer: ArrayBuffer,
+    level: number,
+    durationSeconds: number,
+  ) => {
+    recentPcmBufferRef.current.push({ buffer, level, durationSeconds })
     if (recentPcmBufferRef.current.length > maxRecentPcmChunks) {
       recentPcmBufferRef.current.splice(
         0,
@@ -254,7 +275,7 @@ function BabylonJSProvider({
    *
    * @param buffer ArrayBuffer PCM payload to send to the server
    */
-  const sendOrQueuePCM = (buffer: ArrayBuffer) => {
+  const sendOrQueuePCM = (chunk: QueuedPCMChunk) => {
     // Check actual websocket readyState in addition to connectionState
     const actualWsState = webSocketState.wsRef.current?.readyState
     const isActuallyConnected = actualWsState === WebSocket.OPEN
@@ -265,10 +286,10 @@ function BabylonJSProvider({
       !isFlushingQueue.current
     ) {
       // Websocket is ready and no queue backlog, send immediately
-      webSocketState.sendMessage(buffer)
+      webSocketState.sendMessage(chunk.buffer)
     } else {
       // Queue the data for later sending
-      pcmQueue.current.push(buffer)
+      pcmQueue.current.push(chunk)
       // Try to flush if websocket is ready
       if (isActuallyConnected) {
         flushPCMQueue()
@@ -296,9 +317,14 @@ function BabylonJSProvider({
     currentFlushPromise.current = (async () => {
       try {
         while (pcmQueue.current.length > 0) {
-          const buffer = pcmQueue.current.shift()
-          if (buffer) {
-            webSocketState.sendMessage(buffer)
+          const queuedChunk = pcmQueue.current.shift()
+          if (queuedChunk) {
+            webSocketState.sendMessage(queuedChunk.buffer)
+            if (queuedChunk.durationSeconds > 0) {
+              await new Promise(resolve =>
+                window.setTimeout(resolve, queuedChunk.durationSeconds * 1000),
+              )
+            }
           }
         }
       } catch (error) {
@@ -322,13 +348,16 @@ function BabylonJSProvider({
       ).finish()
     const buffer = uint8Array2ArrayBuffer(data_bytes)
 
-    appendRecentPcmBuffer(buffer, meta.level)
+    appendRecentPcmBuffer(buffer, meta.level, meta.durationSeconds)
     if (isUserStreamingRef.current === false) {
       return
     }
 
     trackUtteranceChunk(meta.level)
-    sendOrQueuePCM(buffer)
+    sendOrQueuePCM({
+      buffer,
+      durationSeconds: meta.durationSeconds,
+    })
   })
 
   // Flush queue when websocket connects
@@ -359,14 +388,21 @@ function BabylonJSProvider({
     // Listen to the observable for recording state changes
     const onUserStreamingStateChanged = (isStreaming: boolean) => {
       if (isStreaming) {
-        const prebufferSnapshot = recentPcmBufferRef.current.slice()
-        resetUtteranceStats(prebufferSnapshot.length)
-        prebufferSnapshot.forEach(chunk => {
-          trackUtteranceChunk(chunk.level)
-          sendOrQueuePCM(chunk.buffer)
-        })
+        pcmQueue.current = []
+        resetUtteranceStats(0)
+        // Flush any native PCM chunks that arrived while the WebSocket was
+        // still connecting so the server receives the beginning of the utterance.
+        if (preStreamPcmBuffer.current.length > 0) {
+          for (const chunk of preStreamPcmBuffer.current) {
+            sendOrQueuePCM(chunk)
+          }
+          preStreamPcmBuffer.current = []
+        }
+        void flushPCMQueue()
       } else {
         logUtteranceStats()
+        // Clear pre-stream buffer on stop to avoid stale data across turns
+        preStreamPcmBuffer.current = []
       }
       isUserStreamingRef.current = isStreaming
     }
@@ -404,6 +440,67 @@ function BabylonJSProvider({
       audioStreamState.offMicLevelChange(onMicLevel)
     }
   }, [globalState, audioStreamState])
+
+  // Native PCM input: when running inside RN app, receive PCM from native
+  // AudioStreamModule instead of using WebView AudioWorklet. This avoids
+  // AudioWorklet initialization delay and isUserStreaming gate dropping packets.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const handleNativePCM = (e: Event) => {
+      const { pcm } = (e as CustomEvent).detail
+      if (!pcm) return
+
+      const pb_request = new orchestrator_v4.orchestrator_v4.OrchestratorV4Request()
+      pb_request.className = 'AudioChunkBody'
+      pb_request.data = pcm
+      const data_bytes =
+        orchestrator_v4.orchestrator_v4.OrchestratorV4Request.encode(
+          pb_request,
+        ).finish()
+      const buffer = uint8Array2ArrayBuffer(data_bytes)
+      const durationSeconds = pcm.length / (16000 * 1 * 2)
+      const chunk = { buffer, durationSeconds }
+
+      if (!isUserStreamingRef.current) {
+        // WebSocket not ready yet — buffer the chunk for later flush
+        preStreamPcmBuffer.current.push(chunk)
+        return
+      }
+
+      sendOrQueuePCM(chunk)
+    }
+
+    const handleNativeVad = (e: Event) => {
+      if (!globalState) return
+      const { state } = (e as CustomEvent).detail
+      if (state === 'silence') {
+        globalState.stateMachine?.putConditionedMessage(
+          new ConditionedMessage(Conditions.NATIVE_VAD_SILENCE, null),
+        )
+      }
+    }
+
+    const handleVoiceWake = (e: Event) => {
+      if (!globalState) return
+      globalState.stateMachine?.putConditionedMessage(
+        new ConditionedMessage(
+          Conditions.WAKE_WORD_DETECTED,
+          (e as CustomEvent).detail,
+        ),
+      )
+    }
+
+    window.addEventListener('dlp3d:native-pcm', handleNativePCM)
+    window.addEventListener('dlp3d:native-vad', handleNativeVad)
+    window.addEventListener('dlp3d:voice-wake', handleVoiceWake)
+
+    return () => {
+      window.removeEventListener('dlp3d:native-pcm', handleNativePCM)
+      window.removeEventListener('dlp3d:native-vad', handleNativeVad)
+      window.removeEventListener('dlp3d:voice-wake', handleVoiceWake)
+    }
+  }, [globalState])
 
   return (
     <BabylonJSContext.Provider value={{ canvas, globalState }}>

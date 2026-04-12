@@ -154,12 +154,19 @@ export interface CharacterConfigDto {
   scene_name: string;
   prompt: string;
   avatar?: string;
+  classification_adapter?: string;
+  classification_model_override?: string;
   conversation_adapter: string;
   conversation_model_override?: string;
+  reaction_adapter?: string;
+  reaction_model_override?: string;
+  memory_adapter?: string;
+  memory_model_override?: string;
   asr_adapter: string;
   tts_adapter: string;
   voice: string;
   voice_speed: number;
+  wake_word?: string;
 }
 
 export type DashboardCharacterDto = CharacterConfigDto;
@@ -181,21 +188,44 @@ export async function fetchAvailableAsr(
 export async function fetchConversationChoices(
   serverUrl: string,
 ): Promise<AdapterChoicesDto> {
+  return fetchConfigChoices(serverUrl, 'conversation_adapter_choices');
+}
+
+export async function fetchReactionChoices(
+  serverUrl: string,
+): Promise<AdapterChoicesDto> {
+  return fetchConfigChoices(serverUrl, 'reaction_adapter_choices');
+}
+
+export async function fetchClassificationChoices(
+  serverUrl: string,
+): Promise<AdapterChoicesDto> {
+  return fetchConfigChoices(serverUrl, 'classification_adapter_choices');
+}
+
+export async function fetchMemoryChoices(
+  serverUrl: string,
+): Promise<AdapterChoicesDto> {
+  return fetchConfigChoices(serverUrl, 'memory_adapter_choices');
+}
+
+async function fetchConfigChoices(
+  serverUrl: string,
+  path: string,
+): Promise<AdapterChoicesDto> {
   const t0 = Date.now();
-  pushDebugLog('api', 'GET conversation_adapter_choices');
-  const response = await fetch(
-    buildConfigUrl(serverUrl, 'conversation_adapter_choices'),
-  );
+  pushDebugLog('api', `GET ${path}`);
+  const response = await fetch(buildConfigUrl(serverUrl, path));
   if (!response.ok) {
     pushDebugLog(
       'api',
-      `✗ conversation_adapter_choices ${response.status} ${Date.now() - t0}ms`,
+      `✗ ${path} ${response.status} ${Date.now() - t0}ms`,
     );
     throw new Error(`HTTP ${response.status}`);
   }
   pushDebugLog(
     'api',
-    `✓ conversation_adapter_choices ${response.status} ${Date.now() - t0}ms`,
+    `✓ ${path} ${response.status} ${Date.now() - t0}ms`,
   );
   return response.json() as Promise<AdapterChoicesDto>;
 }

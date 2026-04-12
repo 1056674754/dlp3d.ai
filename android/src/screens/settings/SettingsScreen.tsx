@@ -19,7 +19,7 @@ import {
   Chip,
   MD3Theme,
 } from 'react-native-paper';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSelector, useDispatch } from 'react-redux';
 import type { RootState } from '@/store';
@@ -35,6 +35,9 @@ import {
   fetchAvailableAsr,
   fetchAvailableTts,
   fetchConversationChoices,
+  fetchReactionChoices,
+  fetchClassificationChoices,
+  fetchMemoryChoices,
   fetchAsrChoices,
   fetchTtsChoices,
   fetchTtsVoiceNames,
@@ -79,6 +82,14 @@ function getSceneLabel(
   return t(`settings.scenes.${sceneName}`, { defaultValue: sceneName });
 }
 
+function getPromptPreview(
+  prompt: string | undefined,
+  fallback: string,
+): string {
+  const normalized = (prompt ?? '').replace(/\s+/g, ' ').trim();
+  return normalized.length > 0 ? normalized : fallback;
+}
+
 interface VoiceOption {
   value: string;
   label: string;
@@ -87,6 +98,82 @@ interface VoiceOption {
 function getVoiceLabel(voiceOptions: VoiceOption[], voiceId: string): string {
   const matched = voiceOptions.find(option => option.value === voiceId);
   return matched?.label || voiceId;
+}
+
+type LlmFeature = 'conversation' | 'reaction' | 'memory' | 'classification';
+
+const LLM_FEATURE_META: Record<
+  LlmFeature,
+  {
+    titleKey:
+      | 'settings.llmConversation'
+      | 'settings.llmReaction'
+      | 'settings.llmMemory'
+      | 'settings.llmClassification';
+    dialogTitleKey:
+      | 'settings.dialogs.conversationModel'
+      | 'settings.dialogs.reactionModel'
+      | 'settings.dialogs.memoryModel'
+      | 'settings.dialogs.classificationModel';
+    emptyChoicesKey:
+      | 'settings.dialogs.noConversationChoices'
+      | 'settings.dialogs.noReactionChoices'
+      | 'settings.dialogs.noMemoryChoices'
+      | 'settings.dialogs.noClassificationChoices';
+  }
+> = {
+  conversation: {
+    titleKey: 'settings.llmConversation',
+    dialogTitleKey: 'settings.dialogs.conversationModel',
+    emptyChoicesKey: 'settings.dialogs.noConversationChoices',
+  },
+  reaction: {
+    titleKey: 'settings.llmReaction',
+    dialogTitleKey: 'settings.dialogs.reactionModel',
+    emptyChoicesKey: 'settings.dialogs.noReactionChoices',
+  },
+  memory: {
+    titleKey: 'settings.llmMemory',
+    dialogTitleKey: 'settings.dialogs.memoryModel',
+    emptyChoicesKey: 'settings.dialogs.noMemoryChoices',
+  },
+  classification: {
+    titleKey: 'settings.llmClassification',
+    dialogTitleKey: 'settings.dialogs.classificationModel',
+    emptyChoicesKey: 'settings.dialogs.noClassificationChoices',
+  },
+};
+
+function getLlmAdapterValue(
+  cfg: CharacterConfigDto,
+  feature: LlmFeature,
+): string {
+  switch (feature) {
+    case 'conversation':
+      return cfg.conversation_adapter || '';
+    case 'reaction':
+      return cfg.reaction_adapter || '';
+    case 'memory':
+      return cfg.memory_adapter || '';
+    case 'classification':
+      return cfg.classification_adapter || '';
+  }
+}
+
+function getLlmOverrideValue(
+  cfg: CharacterConfigDto,
+  feature: LlmFeature,
+): string {
+  switch (feature) {
+    case 'conversation':
+      return cfg.conversation_model_override || '';
+    case 'reaction':
+      return cfg.reaction_model_override || '';
+    case 'memory':
+      return cfg.memory_model_override || '';
+    case 'classification':
+      return cfg.classification_model_override || '';
+  }
 }
 
 function getAvailabilityDescription(
@@ -108,30 +195,47 @@ function clampSpeed(value: number): number {
 }
 
 interface BottomSheetProps {
-  onClose: () => void;
+  onCancel: () => void;
+  onDone: () => void;
   title: string;
   theme: MD3Theme;
-  closeLabel: string;
+  cancelLabel: string;
+  doneLabel: string;
+  doneDisabled?: boolean;
+  doneLoading?: boolean;
   children: React.ReactNode;
 }
 
 function BottomSheet({
-  onClose,
+  onCancel,
+  onDone,
   title,
   theme,
-  closeLabel,
+  cancelLabel,
+  doneLabel,
+  doneDisabled,
+  doneLoading,
   children,
 }: BottomSheetProps) {
   return (
     <View style={styles.sheetOverlay}>
-      <Pressable style={styles.sheetBackdrop} onPress={onClose} />
+      <Pressable style={styles.sheetBackdrop} onPress={onCancel} />
       <View style={[styles.sheet, { backgroundColor: theme.colors.surface }]}>
         <View style={styles.sheetHeader}>
+          <Button {...paperButtonFontScalingProps} compact onPress={onCancel}>
+            {cancelLabel}
+          </Button>
           <Text style={[styles.sheetTitle, { color: theme.colors.onSurface }]}>
             {title}
           </Text>
-          <Button {...paperButtonFontScalingProps} compact onPress={onClose}>
-            {closeLabel}
+          <Button
+            {...paperButtonFontScalingProps}
+            compact
+            onPress={onDone}
+            disabled={doneDisabled}
+            loading={doneLoading}
+          >
+            {doneLabel}
           </Button>
         </View>
         <ScrollView
@@ -151,6 +255,7 @@ export function SettingsScreen() {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const dispatch = useDispatch();
+  const navigation = useNavigation<any>();
   const serverUrl = useSelector((state: RootState) => state.app.serverUrl);
   const userInfo = useSelector((state: RootState) => state.auth.userInfo);
   const selectedCharacterId = useSelector(
@@ -172,38 +277,47 @@ export function SettingsScreen() {
     [],
   );
   const [conversationChoices, setConversationChoices] = useState<string[]>([]);
+  const [reactionChoices, setReactionChoices] = useState<string[]>([]);
+  const [memoryChoices, setMemoryChoices] = useState<string[]>([]);
+  const [classificationChoices, setClassificationChoices] = useState<string[]>(
+    [],
+  );
   const [asrChoices, setAsrChoices] = useState<string[]>([]);
   const [ttsChoices, setTtsChoices] = useState<string[]>([]);
   const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [voiceLoading, setVoiceLoading] = useState(false);
 
-  const [llmDialog, setLlmDialog] = useState(false);
-  const [pickConv, setPickConv] = useState('');
-  const [pickOverride, setPickOverride] = useState('');
+  const [nameDialog, setNameDialog] = useState(false);
+  const [pickName, setPickName] = useState('');
+  const [llmDialogFeature, setLlmDialogFeature] = useState<LlmFeature | null>(
+    null,
+  );
+  const [pickLlmAdapter, setPickLlmAdapter] = useState('');
+  const [pickLlmOverride, setPickLlmOverride] = useState('');
   const [asrDialog, setAsrDialog] = useState(false);
   const [pickAsr, setPickAsr] = useState('');
   const [ttsDialog, setTtsDialog] = useState(false);
-  const [voiceDialog, setVoiceDialog] = useState(false);
 
   const [ttsAdapter, setTtsAdapter] = useState('');
   const [voice, setVoice] = useState('');
   const [voiceSpeed, setVoiceSpeed] = useState('1');
-  const [promptText, setPromptText] = useState('');
+  const [wakeWord, setWakeWord] = useState('');
 
   const [sceneDialog, setSceneDialog] = useState(false);
   const [pickScene, setPickScene] = useState('');
+  const loadedCharacterId = config?.character_id ?? null;
 
   const applyConfig = useCallback((cfg: CharacterConfigDto) => {
     setConfig(cfg);
-    setPickConv(cfg.conversation_adapter || '');
-    setPickOverride(cfg.conversation_model_override || '');
+    setPickName(cfg.character_name || '');
     setPickAsr(cfg.asr_adapter || '');
     setTtsAdapter(cfg.tts_adapter || '');
     setVoice(cfg.voice || '');
     setVoiceSpeed(String(cfg.voice_speed ?? 1));
-    setPromptText(cfg.prompt || '');
+    setWakeWord(cfg.wake_word || '');
     setPickScene(normalizeHdriSceneName(cfg.scene_name));
   }, []);
 
@@ -214,20 +328,34 @@ export function SettingsScreen() {
     });
   }, []);
 
-  const loadCharacter = useCallback(async () => {
+  const loadCharacter = useCallback(async (options?: { background?: boolean }) => {
+    const background = options?.background === true;
     if (!userInfo.id || !activeCharacterId) {
       setConfig(null);
+      setWakeWord('');
       setLlmAvailableProviders([]);
       setAsrAvailableProviders([]);
       setTtsAvailableProviders([]);
       setConversationChoices([]);
+      setReactionChoices([]);
+      setMemoryChoices([]);
+      setClassificationChoices([]);
       setAsrChoices([]);
       setTtsChoices([]);
       setVoiceOptions([]);
+      setRefreshing(false);
       return;
     }
 
-    setLoading(true);
+    const shouldBlockScreen =
+      !background && loadedCharacterId !== activeCharacterId;
+
+    if (shouldBlockScreen) {
+      setLoading(true);
+    } else if (background) {
+      setRefreshing(true);
+    }
+
     try {
       const loadDashboardConfig = async () => {
         try {
@@ -260,7 +388,10 @@ export function SettingsScreen() {
         llm,
         asr,
         tts,
-        llmChoices,
+        conversationAdapterChoices,
+        reactionAdapterChoices,
+        memoryAdapterChoices,
+        classificationAdapterChoices,
         speechChoices,
         speechSynthesisChoices,
       ] = await Promise.all([
@@ -269,6 +400,9 @@ export function SettingsScreen() {
         fetchAvailableAsr(serverUrl, userInfo.id),
         fetchAvailableTts(serverUrl, userInfo.id),
         fetchConversationChoices(serverUrl),
+        fetchReactionChoices(serverUrl),
+        fetchMemoryChoices(serverUrl),
+        fetchClassificationChoices(serverUrl),
         fetchAsrChoices(serverUrl),
         fetchTtsChoices(serverUrl),
       ]);
@@ -279,8 +413,34 @@ export function SettingsScreen() {
       setTtsAvailableProviders(tts.options?.length ? tts.options : []);
       setConversationChoices(
         mergeChoicesWithCurrent(
-          llmChoices.choices?.length ? llmChoices.choices : [],
+          conversationAdapterChoices.choices?.length
+            ? conversationAdapterChoices.choices
+            : [],
           cfg.conversation_adapter,
+        ),
+      );
+      setReactionChoices(
+        mergeChoicesWithCurrent(
+          reactionAdapterChoices.choices?.length
+            ? reactionAdapterChoices.choices
+            : [],
+          cfg.reaction_adapter,
+        ),
+      );
+      setMemoryChoices(
+        mergeChoicesWithCurrent(
+          memoryAdapterChoices.choices?.length
+            ? memoryAdapterChoices.choices
+            : [],
+          cfg.memory_adapter,
+        ),
+      );
+      setClassificationChoices(
+        mergeChoicesWithCurrent(
+          classificationAdapterChoices.choices?.length
+            ? classificationAdapterChoices.choices
+            : [],
+          cfg.classification_adapter,
         ),
       );
       setAsrChoices(
@@ -304,13 +464,21 @@ export function SettingsScreen() {
           ? error.message
           : t('settings.alerts.loadFailedMessage'),
       );
-      setConfig(null);
+      if (shouldBlockScreen) {
+        setConfig(null);
+      }
     } finally {
-      setLoading(false);
+      if (shouldBlockScreen) {
+        setLoading(false);
+      }
+      if (background) {
+        setRefreshing(false);
+      }
     }
   }, [
     activeCharacterId,
     applyConfig,
+    loadedCharacterId,
     serverUrl,
     t,
     userInfo.email,
@@ -320,13 +488,80 @@ export function SettingsScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadCharacter();
+    }, [loadCharacter]),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
       return () => {
         dispatch(setSettingsCharacterId(null));
       };
-    }, [dispatch, loadCharacter]),
+    }, [dispatch]),
   );
 
   const readOnly = config?.read_only === true;
+  const promptPreview = getPromptPreview(
+    config?.prompt,
+    t('chatList.noPromptSet'),
+  );
+
+  const openNameDialog = useCallback(() => {
+    if (!config) {
+      return;
+    }
+    setPickName(config.character_name || '');
+    setNameDialog(true);
+  }, [config]);
+
+  const openLlmDialog = useCallback((feature: LlmFeature) => {
+    if (!config) {
+      return;
+    }
+    setPickLlmAdapter(getLlmAdapterValue(config, feature));
+    setPickLlmOverride(getLlmOverrideValue(config, feature));
+    setLlmDialogFeature(feature);
+  }, [config]);
+
+  const openAsrDialog = useCallback(() => {
+    if (!config) {
+      return;
+    }
+    setPickAsr(config.asr_adapter || '');
+    setAsrDialog(true);
+  }, [config]);
+
+  const openTtsDialog = useCallback(() => {
+    if (!config) {
+      return;
+    }
+    setTtsAdapter(config.tts_adapter || '');
+    setVoice(config.voice || '');
+    setVoiceSpeed(String(config.voice_speed ?? 1));
+    setTtsDialog(true);
+  }, [config]);
+
+  const openSceneDialog = useCallback(() => {
+    if (!config) {
+      return;
+    }
+    setPickScene(normalizeHdriSceneName(config.scene_name));
+    setSceneDialog(true);
+  }, [config]);
+
+  const openPromptEditor = useCallback(() => {
+    if (!config) {
+      return;
+    }
+    navigation.navigate(
+      'CharacterPromptEditor' as never,
+      {
+        characterId: config.character_id,
+        characterName: config.character_name,
+        initialPrompt: config.prompt || '',
+        readOnly,
+      } as never,
+    );
+  }, [config, navigation, readOnly]);
 
   useEffect(() => {
     if (!ttsAdapter) {
@@ -365,47 +600,11 @@ export function SettingsScreen() {
     };
   }, [serverUrl, ttsAdapter]);
 
-  useEffect(() => {
-    if (!config || readOnly || !activeCharacterId || !ttsAdapter) {
-      return;
-    }
-
-    const parsedSpeed = parseFloat(voiceSpeed);
-    if (!Number.isFinite(parsedSpeed)) {
-      return;
-    }
-
-    const normalizedSpeed = clampSpeed(parsedSpeed);
-    if (
-      config.tts_adapter === ttsAdapter &&
-      config.voice === voice &&
-      Math.abs((config.voice_speed ?? 1) - normalizedSpeed) < 0.001
-    ) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      void runSave('tts', () =>
-        patchDashboardCharacter(serverUrl, activeCharacterId, {
-          tts_adapter: ttsAdapter,
-          voice,
-          voice_speed: normalizedSpeed,
-        }),
-      );
-    }, 650);
-
-    return () => clearTimeout(timer);
-  }, [
-    activeCharacterId,
-    config,
-    readOnly,
-    serverUrl,
-    ttsAdapter,
-    voice,
-    voiceSpeed,
-  ]);
-
-  const runSave = async (key: string, fn: () => Promise<unknown>) => {
+  const runSave = async (
+    key: string,
+    fn: () => Promise<unknown>,
+    options?: { onSuccess?: () => void; silent?: boolean },
+  ) => {
     if (!userInfo.id || !activeCharacterId) {
       return;
     }
@@ -413,8 +612,11 @@ export function SettingsScreen() {
     try {
       await fn();
       notifyWeb();
-      await loadCharacter();
-      Alert.alert(t('common.saved'));
+      await loadCharacter({ background: true });
+      options?.onSuccess?.();
+      if (!options?.silent) {
+        Alert.alert(t('common.saved'));
+      }
     } catch (error) {
       Alert.alert(
         t('common.error'),
@@ -427,22 +629,69 @@ export function SettingsScreen() {
     }
   };
 
-  const handleSaveLlm = () =>
-    runSave('llm', () =>
-      patchDashboardCharacter(serverUrl, activeCharacterId!, {
-        conversation_adapter: pickConv,
-        conversation_model_override: pickOverride,
-      }),
+  const handleSaveName = () =>
+    runSave(
+      'name',
+      () =>
+        patchDashboardCharacter(serverUrl, activeCharacterId!, {
+          character_name: pickName.trim(),
+        }),
+      {
+        silent: true,
+        onSuccess: () => setNameDialog(false),
+      },
     );
+
+  const handleSaveLlm = () =>
+    llmDialogFeature
+      ? runSave(
+          `llm-${llmDialogFeature}`,
+          () => {
+            switch (llmDialogFeature) {
+              case 'conversation':
+                return patchDashboardCharacter(serverUrl, activeCharacterId!, {
+                  conversation_adapter: pickLlmAdapter,
+                  conversation_model_override: pickLlmOverride,
+                });
+              case 'reaction':
+                return patchDashboardCharacter(serverUrl, activeCharacterId!, {
+                  reaction_adapter: pickLlmAdapter,
+                  reaction_model_override: pickLlmOverride,
+                });
+              case 'memory':
+                return patchDashboardCharacter(serverUrl, activeCharacterId!, {
+                  memory_adapter: pickLlmAdapter,
+                  memory_model_override: pickLlmOverride,
+                });
+              case 'classification':
+                return patchDashboardCharacter(serverUrl, activeCharacterId!, {
+                  classification_adapter: pickLlmAdapter,
+                  classification_model_override: pickLlmOverride,
+                });
+            }
+          },
+          {
+            silent: true,
+            onSuccess: () => setLlmDialogFeature(null),
+          },
+        )
+      : Promise.resolve();
 
   const handleSaveTts = () => {
     const parsedSpeed = clampSpeed(parseFloat(voiceSpeed));
-    return runSave('tts', () =>
-      patchDashboardCharacter(serverUrl, activeCharacterId!, {
-        tts_adapter: ttsAdapter,
-        voice,
-        voice_speed: Number.isFinite(parsedSpeed) ? parsedSpeed : 1,
-      }),
+    return runSave(
+      'tts',
+      () =>
+        patchDashboardCharacter(serverUrl, activeCharacterId!, {
+          tts_adapter: ttsAdapter,
+          voice,
+          voice_speed: Number.isFinite(parsedSpeed) ? parsedSpeed : 1,
+          wake_word: wakeWord.trim(),
+        }),
+      {
+        silent: true,
+        onSuccess: () => setTtsDialog(false),
+      },
     );
   };
 
@@ -461,24 +710,29 @@ export function SettingsScreen() {
   };
 
   const handleSaveAsr = () =>
-    runSave('asr', () =>
-      patchDashboardCharacter(serverUrl, activeCharacterId!, {
-        asr_adapter: pickAsr,
-      }),
-    );
-
-  const handleSavePrompt = () =>
-    runSave('prompt', () =>
-      patchDashboardCharacter(serverUrl, activeCharacterId!, {
-        prompt: promptText,
-      }),
+    runSave(
+      'asr',
+      () =>
+        patchDashboardCharacter(serverUrl, activeCharacterId!, {
+          asr_adapter: pickAsr,
+        }),
+      {
+        silent: true,
+        onSuccess: () => setAsrDialog(false),
+      },
     );
 
   const handleSaveScene = () =>
-    runSave('scene', () =>
-      patchDashboardCharacter(serverUrl, activeCharacterId!, {
-        scene_name: pickScene,
-      }),
+    runSave(
+      'scene',
+      () =>
+        patchDashboardCharacter(serverUrl, activeCharacterId!, {
+          scene_name: pickScene,
+        }),
+      {
+        silent: true,
+        onSuccess: () => setSceneDialog(false),
+      },
     );
 
   const renderAdapterCards = (
@@ -568,6 +822,30 @@ export function SettingsScreen() {
     compact: true,
   } as const;
 
+  const activeLlmMeta = llmDialogFeature
+    ? LLM_FEATURE_META[llmDialogFeature]
+    : null;
+
+  const activeLlmChoices =
+    llmDialogFeature === 'conversation'
+      ? conversationChoices
+      : llmDialogFeature === 'reaction'
+        ? reactionChoices
+        : llmDialogFeature === 'memory'
+          ? memoryChoices
+          : llmDialogFeature === 'classification'
+            ? classificationChoices
+            : [];
+
+  const getLlmDescription = (feature: LlmFeature) => {
+    if (!config) {
+      return '—';
+    }
+    const adapter = getLlmAdapterValue(config, feature);
+    const override = getLlmOverrideValue(config, feature);
+    return `${adapter || '—'}${override ? ` · ${override}` : ''}`;
+  };
+
   return (
     <View
       style={[styles.screenRoot, { backgroundColor: theme.colors.background }]}
@@ -605,6 +883,17 @@ export function SettingsScreen() {
                     : t('settings.activeCharacter')
                 }
                 left={props => <List.Icon {...props} icon="account-circle" />}
+                onPress={() => !readOnly && openNameDialog()}
+                disabled={readOnly}
+                right={props =>
+                  refreshing ? (
+                    <ActivityIndicator
+                      size="small"
+                      color={props.color}
+                      style={props.style}
+                    />
+                  ) : null
+                }
               />
             </List.Section>
 
@@ -618,265 +907,144 @@ export function SettingsScreen() {
               <List.Item
                 {...compactListItemProps}
                 title={t('settings.llmConversation')}
-                description={`${pickConv || '—'}${
-                  pickOverride ? ` · ${pickOverride}` : ''
-                }`}
+                description={getLlmDescription('conversation')}
                 descriptionNumberOfLines={1}
                 left={props => <List.Icon {...props} icon="brain" />}
-                onPress={() => !readOnly && setLlmDialog(true)}
+                onPress={() => !readOnly && openLlmDialog('conversation')}
                 disabled={readOnly}
               />
-              {!readOnly ? (
-                <View style={styles.rowBtn}>
-                  <Button
-                    {...compactActionButtonProps}
-                    mode="contained-tonal"
-                    onPress={() => void handleSaveLlm()}
-                    disabled={saving !== null}
-                    loading={saving === 'llm'}
-                  >
-                    {t('settings.saveLlm')}
-                  </Button>
-                </View>
-              ) : null}
+
+              <List.Item
+                {...compactListItemProps}
+                title={t('settings.llmReaction')}
+                description={getLlmDescription('reaction')}
+                descriptionNumberOfLines={1}
+                left={props => <List.Icon {...props} icon="brain" />}
+                onPress={() => !readOnly && openLlmDialog('reaction')}
+                disabled={readOnly}
+              />
+
+              <List.Item
+                {...compactListItemProps}
+                title={t('settings.llmMemory')}
+                description={getLlmDescription('memory')}
+                descriptionNumberOfLines={1}
+                left={props => <List.Icon {...props} icon="brain" />}
+                onPress={() => !readOnly && openLlmDialog('memory')}
+                disabled={readOnly}
+              />
+
+              <List.Item
+                {...compactListItemProps}
+                title={t('settings.llmClassification')}
+                description={getLlmDescription('classification')}
+                descriptionNumberOfLines={1}
+                left={props => <List.Icon {...props} icon="brain" />}
+                onPress={() => !readOnly && openLlmDialog('classification')}
+                disabled={readOnly}
+              />
 
               <List.Item
                 {...compactListItemProps}
                 title={t('settings.asrRecognition')}
-                description={pickAsr || '—'}
+                description={config.asr_adapter || '—'}
                 descriptionNumberOfLines={1}
                 left={props => (
-                  <List.Icon {...props} icon="microphone-message" />
+                  <List.Icon {...props} icon="microphone-outline" />
                 )}
-                onPress={() => !readOnly && setAsrDialog(true)}
+                onPress={() => !readOnly && openAsrDialog()}
                 disabled={readOnly}
               />
-              {!readOnly ? (
-                <View style={styles.rowBtn}>
-                  <Button
-                    {...compactActionButtonProps}
-                    mode="contained-tonal"
-                    onPress={() => void handleSaveAsr()}
-                    disabled={saving !== null}
-                    loading={saving === 'asr'}
-                  >
-                    {t('settings.saveAsr')}
-                  </Button>
-                </View>
-              ) : null}
 
-              <List.Subheader {...compactSubheaderProps}>
-                {t('settings.tts')}
-              </List.Subheader>
               <List.Item
                 {...compactListItemProps}
-                title={t('settings.ttsAdapter')}
-                description={ttsAdapter || '—'}
+                title={t('settings.tts')}
+                description={`${config.tts_adapter || '—'} · ${
+                  config.voice
+                    ? getVoiceLabel(voiceOptions, config.voice)
+                    : '—'
+                } · ${(config.voice_speed ?? 1).toFixed(1)}x`}
                 descriptionNumberOfLines={1}
                 left={props => <List.Icon {...props} icon="speaker-multiple" />}
-                onPress={() => !readOnly && setTtsDialog(true)}
+                onPress={() => !readOnly && openTtsDialog()}
                 disabled={readOnly}
               />
+
               <List.Item
                 {...compactListItemProps}
-                title={t('settings.voice')}
-                description={voice ? getVoiceLabel(voiceOptions, voice) : '—'}
-                descriptionNumberOfLines={1}
-                left={props => <List.Icon {...props} icon="account-voice" />}
-                onPress={() => !readOnly && ttsAdapter && setVoiceDialog(true)}
-                disabled={readOnly || !ttsAdapter}
+                title={t('settings.prompt')}
+                description={promptPreview}
+                descriptionNumberOfLines={3}
+                left={props => <List.Icon {...props} icon="text-box-outline" />}
+                onPress={openPromptEditor}
               />
-              <View style={styles.pad}>
-                <Text
-                  style={[
-                    styles.speedHeading,
-                    { color: theme.colors.onSurface },
-                  ]}
-                >
-                  {t('settings.voiceSpeed')}:{' '}
-                  {clampSpeed(parseFloat(voiceSpeed) || 1).toFixed(1)}x
-                </Text>
-                <Text
-                  style={[
-                    styles.speedHint,
-                    { color: theme.colors.onSurfaceVariant },
-                  ]}
-                >
-                  {t('settings.voiceSpeedHint')}
-                </Text>
-                <View
-                  style={[
-                    styles.speedRail,
-                    { backgroundColor: theme.colors.surfaceVariant },
-                  ]}
-                >
-                  {SPEED_MARKS.map(mark => {
-                    const selected =
-                      Math.abs((parseFloat(voiceSpeed) || 1) - mark) < 0.001;
-                    return (
-                      <Pressable
-                        key={mark}
-                        onPress={() => selectVoiceSpeed(mark)}
-                        disabled={readOnly}
-                        style={[
-                          styles.speedMark,
-                          {
-                            backgroundColor: selected
-                              ? theme.colors.primary
-                              : theme.colors.background,
-                            borderColor: selected
-                              ? theme.colors.primary
-                              : theme.colors.outline + '50',
-                          },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.speedMarkLabel,
-                            {
-                              color: selected
-                                ? theme.colors.onPrimary
-                                : theme.colors.onSurface,
-                            },
-                          ]}
-                        >
-                          {mark
-                            .toFixed(mark % 1 === 0 ? 1 : 2)
-                            .replace(/0$/, '')}
-                          x
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                <View style={styles.speedAdjustRow}>
-                  <Button
-                    {...paperButtonFontScalingProps}
-                    mode="outlined"
-                    compact
-                    onPress={() => adjustVoiceSpeed(-SPEED_STEP)}
-                    disabled={readOnly}
-                  >
-                    {t('settings.slower')}
-                  </Button>
-                  <View
-                    style={[
-                      styles.speedValuePill,
-                      { backgroundColor: theme.colors.surfaceVariant },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.speedValueText,
-                        { color: theme.colors.onSurface },
-                      ]}
-                    >
-                      {clampSpeed(parseFloat(voiceSpeed) || 1).toFixed(1)}x
-                    </Text>
-                  </View>
-                  <Button
-                    {...paperButtonFontScalingProps}
-                    mode="outlined"
-                    compact
-                    onPress={() => adjustVoiceSpeed(SPEED_STEP)}
-                    disabled={readOnly}
-                  >
-                    {t('settings.faster')}
-                  </Button>
-                </View>
-                {!readOnly ? (
-                  <Button
-                    {...compactActionButtonProps}
-                    mode="contained-tonal"
-                    style={styles.inputGap}
-                    onPress={() => void handleSaveTts()}
-                    disabled={saving !== null || !ttsAdapter}
-                    loading={saving === 'tts'}
-                  >
-                    {t('settings.saveTts')}
-                  </Button>
-                ) : null}
-              </View>
-
-              <List.Subheader {...compactSubheaderProps}>
-                {t('settings.prompt')}
-              </List.Subheader>
-              <View style={styles.pad}>
-                <TextInput
-                  {...paperTextInputFontScalingProps}
-                  label={t('settings.systemPrompt')}
-                  value={promptText}
-                  onChangeText={setPromptText}
-                  mode="outlined"
-                  multiline
-                  numberOfLines={5}
-                  disabled={readOnly}
-                />
-                {!readOnly ? (
-                  <Button
-                    {...compactActionButtonProps}
-                    mode="contained-tonal"
-                    style={styles.inputGap}
-                    onPress={() => void handleSavePrompt()}
-                    disabled={saving !== null}
-                    loading={saving === 'prompt'}
-                  >
-                    {t('settings.savePrompt')}
-                  </Button>
-                ) : null}
-              </View>
 
               <List.Item
                 {...compactListItemProps}
                 title={t('settings.sceneHdri')}
-                description={pickScene ? getSceneLabel(t, pickScene) : '—'}
+                description={
+                  config.scene_name ? getSceneLabel(t, config.scene_name) : '—'
+                }
                 descriptionNumberOfLines={1}
                 left={props => <List.Icon {...props} icon="image-filter-hdr" />}
-                onPress={() => !readOnly && setSceneDialog(true)}
+                onPress={() => !readOnly && openSceneDialog()}
                 disabled={readOnly}
               />
-              {!readOnly ? (
-                <View style={styles.rowBtn}>
-                  <Button
-                    {...compactActionButtonProps}
-                    mode="contained-tonal"
-                    onPress={() => void handleSaveScene()}
-                    disabled={saving !== null}
-                    loading={saving === 'scene'}
-                  >
-                    {t('settings.saveScene')}
-                  </Button>
-                </View>
-              ) : null}
             </List.Section>
           </>
         ) : null}
       </ScrollView>
 
       <Portal>
-        {llmDialog ? (
+        {nameDialog ? (
           <BottomSheet
-            onClose={() => setLlmDialog(false)}
-            title={t('settings.dialogs.conversationModel')}
+            onCancel={() => setNameDialog(false)}
+            onDone={() => void handleSaveName()}
+            title={t('settings.characterName')}
             theme={theme}
-            closeLabel={t('common.done')}
+            cancelLabel={t('common.cancel')}
+            doneLabel={t('common.done')}
+            doneDisabled={saving !== null || pickName.trim().length === 0}
+            doneLoading={saving === 'name'}
           >
-            {conversationChoices.length === 0 ? (
-              <Text>{t('settings.dialogs.noConversationChoices')}</Text>
+            <TextInput
+              {...denseTextInputProps}
+              label={t('settings.characterName')}
+              value={pickName}
+              onChangeText={setPickName}
+              mode="outlined"
+              autoFocus
+            />
+          </BottomSheet>
+        ) : null}
+
+        {llmDialogFeature && activeLlmMeta ? (
+          <BottomSheet
+            onCancel={() => setLlmDialogFeature(null)}
+            onDone={() => void handleSaveLlm()}
+            title={t(activeLlmMeta.dialogTitleKey)}
+            theme={theme}
+            cancelLabel={t('common.cancel')}
+            doneLabel={t('common.done')}
+            doneDisabled={saving !== null || pickLlmAdapter.trim().length === 0}
+            doneLoading={saving === `llm-${llmDialogFeature}`}
+          >
+            {activeLlmChoices.length === 0 ? (
+              <Text>{t(activeLlmMeta.emptyChoicesKey)}</Text>
             ) : (
               renderAdapterCards(
-                conversationChoices,
-                pickConv,
+                activeLlmChoices,
+                pickLlmAdapter,
                 llmAvailableProviders,
-                setPickConv,
-                t('settings.dialogs.conversationModel'),
+                setPickLlmAdapter,
+                t(activeLlmMeta.dialogTitleKey),
               )
             )}
             <TextInput
               {...denseTextInputProps}
-              label={t('settings.dialogs.conversationAdapter')}
-              value={pickConv}
-              onChangeText={setPickConv}
+              label={t('settings.dialogs.llmAdapter')}
+              value={pickLlmAdapter}
+              onChangeText={setPickLlmAdapter}
               mode="outlined"
               autoCapitalize="none"
               style={styles.inputGap}
@@ -884,23 +1052,27 @@ export function SettingsScreen() {
             <TextInput
               {...denseTextInputProps}
               label={t('settings.dialogs.modelOverrideOptional')}
-              value={pickOverride}
-              onChangeText={setPickOverride}
+              value={pickLlmOverride}
+              onChangeText={setPickLlmOverride}
               mode="outlined"
               style={styles.inputGap}
             />
             <Text style={styles.sheetHint}>
-              {t('settings.dialogs.conversationAdapterHint')}
+              {t('settings.dialogs.llmAdapterHint')}
             </Text>
           </BottomSheet>
         ) : null}
 
         {asrDialog ? (
           <BottomSheet
-            onClose={() => setAsrDialog(false)}
+            onCancel={() => setAsrDialog(false)}
+            onDone={() => void handleSaveAsr()}
             title={t('settings.dialogs.speechRecognition')}
             theme={theme}
-            closeLabel={t('common.done')}
+            cancelLabel={t('common.cancel')}
+            doneLabel={t('common.done')}
+            doneDisabled={saving !== null || pickAsr.trim().length === 0}
+            doneLoading={saving === 'asr'}
           >
             {asrChoices.length === 0 ? (
               <Text>{t('settings.dialogs.noAsrChoices')}</Text>
@@ -930,11 +1102,24 @@ export function SettingsScreen() {
 
         {ttsDialog ? (
           <BottomSheet
-            onClose={() => setTtsDialog(false)}
-            title={t('settings.chooseTtsAdapter')}
+            onCancel={() => {
+              if (config) {
+                setTtsAdapter(config.tts_adapter || '');
+                setVoice(config.voice || '');
+                setVoiceSpeed(String(config.voice_speed ?? 1));
+                setWakeWord(config.wake_word || '');
+              }
+              setTtsDialog(false);
+            }}
+            onDone={() => void handleSaveTts()}
+            title={t('settings.tts')}
             theme={theme}
-            closeLabel={t('common.done')}
+            cancelLabel={t('common.cancel')}
+            doneLabel={t('common.done')}
+            doneDisabled={saving !== null || ttsAdapter.trim().length === 0}
+            doneLoading={saving === 'tts'}
           >
+            <Text style={styles.sheetGroupTitle}>{t('settings.ttsAdapter')}</Text>
             {ttsChoices.length === 0 ? (
               <Text>{t('settings.noTtsChoices')}</Text>
             ) : (
@@ -993,33 +1178,14 @@ export function SettingsScreen() {
                 })}
               </View>
             )}
-          </BottomSheet>
-        ) : null}
 
-        {voiceDialog ? (
-          <BottomSheet
-            onClose={() => setVoiceDialog(false)}
-            title={t('settings.chooseVoice')}
-            theme={theme}
-            closeLabel={t('common.done')}
-          >
+            <Text style={styles.sheetGroupTitle}>{t('settings.voice')}</Text>
             {voiceLoading ? (
               <View style={styles.centerPad}>
                 <ActivityIndicator />
               </View>
             ) : voiceOptions.length === 0 ? (
-              <>
-                <Text>{t('settings.noVoiceChoices')}</Text>
-                <TextInput
-                  {...denseTextInputProps}
-                  label={t('settings.manualVoice')}
-                  value={voice}
-                  onChangeText={setVoice}
-                  mode="outlined"
-                  autoCapitalize="none"
-                  style={styles.inputGap}
-                />
-              </>
+              <Text>{t('settings.noVoiceChoices')}</Text>
             ) : (
               <View style={styles.choiceStack}>
                 {voiceOptions.map(option => {
@@ -1064,108 +1230,184 @@ export function SettingsScreen() {
                     </Pressable>
                   );
                 })}
-                <TextInput
-                  {...denseTextInputProps}
-                  label={t('settings.manualVoice')}
-                  value={voice}
-                  onChangeText={setVoice}
-                  mode="outlined"
-                  autoCapitalize="none"
-                />
               </View>
             )}
+            <TextInput
+              {...denseTextInputProps}
+              label={t('settings.manualVoice')}
+              value={voice}
+              onChangeText={setVoice}
+              mode="outlined"
+              autoCapitalize="none"
+              style={styles.inputGap}
+            />
+            <TextInput
+              {...denseTextInputProps}
+              label={t('settings.characterWakeWord')}
+              value={wakeWord}
+              onChangeText={setWakeWord}
+              mode="outlined"
+              autoCapitalize="none"
+              style={styles.inputGap}
+            />
+            <Text style={styles.sheetHint}>{t('settings.characterWakeWordHint')}</Text>
+
+            <Text style={styles.sheetGroupTitle}>
+              {t('settings.voiceSpeed')}:{' '}
+              {clampSpeed(parseFloat(voiceSpeed) || 1).toFixed(1)}x
+            </Text>
+            <Text
+              style={[
+                styles.speedHint,
+                { color: theme.colors.onSurfaceVariant },
+              ]}
+            >
+              {t('settings.voiceSpeedHint')}
+            </Text>
+            <View
+              style={[
+                styles.speedRail,
+                { backgroundColor: theme.colors.surfaceVariant },
+              ]}
+            >
+              {SPEED_MARKS.map(mark => {
+                const selected =
+                  Math.abs((parseFloat(voiceSpeed) || 1) - mark) < 0.001;
+                return (
+                  <Pressable
+                    key={mark}
+                    onPress={() => selectVoiceSpeed(mark)}
+                    style={[
+                      styles.speedMark,
+                      {
+                        backgroundColor: selected
+                          ? theme.colors.primary
+                          : theme.colors.background,
+                        borderColor: selected
+                          ? theme.colors.primary
+                          : theme.colors.outline + '50',
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.speedMarkLabel,
+                        {
+                          color: selected
+                            ? theme.colors.onPrimary
+                            : theme.colors.onSurface,
+                        },
+                      ]}
+                    >
+                      {mark
+                        .toFixed(mark % 1 === 0 ? 1 : 2)
+                        .replace(/0$/, '')}
+                      x
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={styles.speedAdjustRow}>
+              <Button
+                {...paperButtonFontScalingProps}
+                mode="outlined"
+                compact
+                onPress={() => adjustVoiceSpeed(-SPEED_STEP)}
+              >
+                {t('settings.slower')}
+              </Button>
+              <View
+                style={[
+                  styles.speedValuePill,
+                  { backgroundColor: theme.colors.surfaceVariant },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.speedValueText,
+                    { color: theme.colors.onSurface },
+                  ]}
+                >
+                  {clampSpeed(parseFloat(voiceSpeed) || 1).toFixed(1)}x
+                </Text>
+              </View>
+              <Button
+                {...paperButtonFontScalingProps}
+                mode="outlined"
+                compact
+                onPress={() => adjustVoiceSpeed(SPEED_STEP)}
+              >
+                {t('settings.faster')}
+              </Button>
+            </View>
           </BottomSheet>
         ) : null}
 
         {sceneDialog ? (
-          <View style={styles.sceneOverlay}>
-            <Pressable
-              style={styles.sceneBackdrop}
-              onPress={() => setSceneDialog(false)}
-            />
-            <View
-              style={[
-                styles.sceneSheet,
-                { backgroundColor: theme.colors.surface },
-              ]}
-            >
-              <View style={styles.sceneSheetHeader}>
-                <Text
-                  style={[
-                    styles.sceneSheetTitle,
-                    { color: theme.colors.onSurface },
-                  ]}
-                >
-                  {t('settings.dialogs.scene')}
-                </Text>
-                <Button
-                  {...paperButtonFontScalingProps}
-                  compact
-                  onPress={() => setSceneDialog(false)}
-                >
-                  {t('common.done')}
-                </Button>
-              </View>
-
-              <ScrollView
-                style={styles.sceneGridScroll}
-                contentContainerStyle={styles.sceneGrid}
-                nestedScrollEnabled
-                keyboardShouldPersistTaps="handled"
-              >
-                {HDRI_SCENE_NAMES.map(name => {
-                  const selected = pickScene === name;
-                  const previewUri = resolveHdriPreviewUri(name);
-                  const sceneLabel = getSceneLabel(t, name);
-                  return (
-                    <Pressable
-                      key={name}
-                      onPress={() => setPickScene(name)}
-                      style={[
-                        styles.sceneCard,
-                        {
-                          backgroundColor: theme.colors.surfaceVariant,
-                          borderColor: selected
-                            ? theme.colors.primary
-                            : theme.colors.outline + '40',
-                        },
-                      ]}
-                    >
-                      {previewUri ? (
-                        <Image
-                          source={{ uri: previewUri }}
-                          style={styles.scenePreview}
-                          resizeMode="cover"
-                        />
-                      ) : (
-                        <View
-                          style={[
-                            styles.scenePreviewFallback,
-                            { backgroundColor: theme.colors.outline + '20' },
-                          ]}
-                        />
-                      )}
-                      <View style={styles.sceneCardFooter}>
-                        <Text
-                          style={[
-                            styles.sceneCardLabel,
-                            {
-                              color: selected
-                                ? theme.colors.primary
-                                : theme.colors.onSurface,
-                            },
-                          ]}
-                          numberOfLines={2}
-                        >
-                          {sceneLabel}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+          <BottomSheet
+            onCancel={() => setSceneDialog(false)}
+            onDone={() => void handleSaveScene()}
+            title={t('settings.dialogs.scene')}
+            theme={theme}
+            cancelLabel={t('common.cancel')}
+            doneLabel={t('common.done')}
+            doneDisabled={saving !== null || pickScene.trim().length === 0}
+            doneLoading={saving === 'scene'}
+          >
+            <View style={styles.sceneGrid}>
+              {HDRI_SCENE_NAMES.map(name => {
+                const selected = pickScene === name;
+                const previewUri = resolveHdriPreviewUri(name);
+                const sceneLabel = getSceneLabel(t, name);
+                return (
+                  <Pressable
+                    key={name}
+                    onPress={() => setPickScene(name)}
+                    style={[
+                      styles.sceneCard,
+                      {
+                        backgroundColor: theme.colors.surfaceVariant,
+                        borderColor: selected
+                          ? theme.colors.primary
+                          : theme.colors.outline + '40',
+                      },
+                    ]}
+                  >
+                    {previewUri ? (
+                      <Image
+                        source={{ uri: previewUri }}
+                        style={styles.scenePreview}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View
+                        style={[
+                          styles.scenePreviewFallback,
+                          { backgroundColor: theme.colors.outline + '20' },
+                        ]}
+                      />
+                    )}
+                    <View style={styles.sceneCardFooter}>
+                      <Text
+                        style={[
+                          styles.sceneCardLabel,
+                          {
+                            color: selected
+                              ? theme.colors.primary
+                              : theme.colors.onSurface,
+                          },
+                        ]}
+                        numberOfLines={2}
+                      >
+                        {sceneLabel}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
             </View>
-          </View>
+          </BottomSheet>
         ) : null}
       </Portal>
     </View>
@@ -1239,13 +1481,15 @@ const styles = StyleSheet.create({
   sheetHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 12,
     paddingBottom: 6,
+    gap: 8,
   },
   sheetTitle: {
+    flex: 1,
     fontSize: 18,
     fontWeight: '700',
+    textAlign: 'center',
   },
   sheetScroll: {
     maxHeight: 560,
@@ -1259,6 +1503,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     opacity: 0.75,
+  },
+  sheetGroupTitle: {
+    marginTop: 8,
+    marginBottom: 8,
+    fontSize: 13,
+    fontWeight: '700',
   },
   choiceStack: {
     gap: 8,
@@ -1330,39 +1580,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
-  sceneOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-  },
-  sceneBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(6, 7, 16, 0.76)',
-  },
-  sceneSheet: {
-    borderRadius: 18,
-    paddingTop: 8,
-    paddingBottom: 4,
-    overflow: 'hidden',
-    maxHeight: '72%',
-  },
-  sceneSheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingBottom: 6,
-  },
-  sceneSheetTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  sceneGridScroll: {
-    maxHeight: 520,
-  },
   sceneGrid: {
-    paddingHorizontal: 12,
-    paddingBottom: 12,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,

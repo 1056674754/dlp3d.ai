@@ -24,6 +24,20 @@ import { useDevice } from '@/contexts/DeviceContext'
 import { useTranslation } from 'react-i18next'
 import GlobalTooltip from '@/components/common/GlobalTooltip'
 import { resolvePublicUrl } from '@/utils/publicUrl'
+import { getProvider } from '@/lib/providers/registry'
+
+const LEGACY_LLM_PROVIDER_MAP: Record<string, string> = {
+  openai: 'openai',
+  anthropic: 'anthropic',
+  gemini: 'gemini',
+  sensenova: 'sensenova',
+  sensechat: 'sensechat',
+  sensenovaomni: 'sensenovaomni',
+  deepseek: 'deepseek',
+  xai: 'xai',
+  qwen: 'alibaba_bailian',
+  volcengine: 'volcengine_realtime_voice',
+}
 /**
  * Choice interface for LLM model selection.
  */
@@ -72,6 +86,7 @@ export default function LLMPanel() {
   const [choices, setChoices] = useState<Choice[]>([])
   const [choicesLoading, setChoicesLoading] = useState(false)
   const [availableLLM, setAvailableLLM] = useState<string[]>([])
+  const docsUrl = getProvider(LEGACY_LLM_PROVIDER_MAP[keyType] || '')?.docsUrl
   /**
    * Handle tab change event.
    *
@@ -288,6 +303,9 @@ export default function LLMPanel() {
         break
       case 'qwen':
         path = '/img/llm/openai.png'
+        break
+      case 'volcengine':
+        path = '/img/llm/huoshan.png'
         break
       default:
         path = '/img/llm/openai.png'
@@ -510,6 +528,22 @@ export default function LLMPanel() {
             backgroundColor: '#1e202f',
           }}
         >
+          {dialogType === 'key' && docsUrl && (
+            <div style={{ marginBottom: '16px', textAlign: 'left' }}>
+              <a
+                href={docsUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  color: '#8ea1ff',
+                  fontSize: '13px',
+                  textDecoration: 'underline',
+                }}
+              >
+                官方文档
+              </a>
+            </div>
+          )}
           {dialogType === 'name' && (
             <>
               <label

@@ -461,12 +461,20 @@ export function DLP3DWebView({
       }
     });
 
+    const unsubResume = bridge.on('voice:resumeListening', () => {
+      pushDebugLog('wake', 'Conversation ended, resuming wake word detection');
+      import('@/services/wakeWordService').then(({ resumeAfterConversation }) => {
+        resumeAfterConversation();
+      });
+    });
+
     return () => {
       unsubReady();
       unsubError();
       unsubLoading();
       unsubStartupMetric();
       unsubDebugLog();
+      unsubResume();
     };
   }, [onReady, onError, onLoadingChange]);
 

@@ -17,15 +17,13 @@ import {
   useSelector,
   useDispatch,
 } from 'react-redux';
-import { persistStore } from 'redux-persist';
 import { PersistGate } from 'redux-persist/integration/react';
-import { configureStore } from '@reduxjs/toolkit';
 import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 import { StatusBar, Platform } from 'react-native';
-import { persistedReducer } from '@/store';
+import { store, persistor } from '@/store';
 import type { RootState } from '@/store';
 import { darkTheme, lightTheme } from '@/theme/theme';
 import { AuthScreen } from '@/screens/auth/AuthScreen';
@@ -35,6 +33,7 @@ import { useWebViewChatSync } from '@/hooks/useWebViewChatSync';
 import { useAndroidRuntimePermissions } from '@/hooks/useAndroidRuntimePermissions';
 import { AppSettingsScreen } from '@/screens/settings/AppSettingsScreen';
 import { SettingsScreen as CharacterSettingsScreen } from '@/screens/settings/SettingsScreen';
+import { PromptEditorScreen } from '@/screens/settings/PromptEditorScreen';
 import { setIsLogin } from '@/store/authSlice';
 import DebugOverlay from '@/components/DebugOverlay';
 import { pushDebugLog } from '@/store/debugLogStore';
@@ -47,6 +46,12 @@ type RootStackParamList = {
   Auth: undefined;
   MainTabs: undefined;
   CharacterSettings: undefined;
+  CharacterPromptEditor: {
+    characterId: string;
+    characterName: string;
+    initialPrompt: string;
+    readOnly: boolean;
+  };
 };
 
 type MainTabParamList = {
@@ -54,14 +59,6 @@ type MainTabParamList = {
   ChatList: undefined;
   Settings: undefined;
 };
-
-export const store = configureStore({
-  reducer: persistedReducer,
-  middleware: getDefaultMiddleware =>
-    getDefaultMiddleware({ serializableCheck: false }),
-});
-
-export const persistor = persistStore(store);
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -198,7 +195,17 @@ function AppNavigator() {
                 title: t('navigation.characterSettingsTitle'),
                 headerStyle: { backgroundColor: theme.colors.background },
                 headerTintColor: theme.colors.onSurface,
-                headerTitleAllowFontScaling: false,
+                headerTitleStyle: { fontSize: 17, fontWeight: '600' },
+              }}
+            />
+            <Stack.Screen
+              name="CharacterPromptEditor"
+              component={PromptEditorScreen}
+              options={{
+                headerShown: true,
+                title: t('navigation.promptEditorTitle'),
+                headerStyle: { backgroundColor: theme.colors.background },
+                headerTintColor: theme.colors.onSurface,
                 headerTitleStyle: { fontSize: 17, fontWeight: '600' },
               }}
             />

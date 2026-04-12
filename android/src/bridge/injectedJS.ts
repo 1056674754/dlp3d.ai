@@ -85,9 +85,28 @@ export function createInjectedJavaScript(config: {
           if (detail.type === 'assets:manifest' && detail.payload) {
             window.__DLP3D_NATIVE_ASSETS__ = detail.payload;
           }
-          // Forward face tracking data directly to 3D scene
           if (detail.type === 'face:position' && detail.payload) {
             window.dispatchEvent(new CustomEvent('dlp3d:face-position', {
+              detail: detail.payload
+            }));
+          }
+          if (detail.type === 'audio:pcm' && detail.payload && detail.payload.data) {
+            var binaryStr = atob(detail.payload.data);
+            var bytes = new Uint8Array(binaryStr.length);
+            for (var k = 0; k < binaryStr.length; k++) {
+              bytes[k] = binaryStr.charCodeAt(k);
+            }
+            window.dispatchEvent(new CustomEvent('dlp3d:native-pcm', {
+              detail: { pcm: bytes }
+            }));
+          }
+          if (detail.type === 'audio:vad' && detail.payload) {
+            window.dispatchEvent(new CustomEvent('dlp3d:native-vad', {
+              detail: { state: detail.payload.state }
+            }));
+          }
+          if (detail.type === 'voice:wake' && detail.payload) {
+            window.dispatchEvent(new CustomEvent('dlp3d:voice-wake', {
               detail: detail.payload
             }));
           }

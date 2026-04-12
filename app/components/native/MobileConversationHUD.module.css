@@ -104,13 +104,13 @@
 }
 
 .statusGlowLive {
-  transform: scale(calc(1 + var(--hud-mic-level, 0) * 1.45));
-  opacity: calc(0.84 + var(--hud-mic-level, 0) * 0.16);
+  transform: scale(calc(1 + var(--hud-mic-level, 0) * 0.42));
+  opacity: calc(0.88 + var(--hud-mic-level, 0) * 0.1);
   box-shadow:
-    0 0 0 calc(6px + var(--hud-mic-level, 0) * 14px)
+    0 0 0 calc(4px + var(--hud-mic-level, 0) * 8px)
       color-mix(in srgb, var(--hud-accent, #8be39a) 24%, transparent),
-    0 0 calc(14px + var(--hud-mic-level, 0) * 26px)
-      color-mix(in srgb, var(--hud-accent, #8be39a) 48%, transparent);
+    0 0 calc(10px + var(--hud-mic-level, 0) * 14px)
+      color-mix(in srgb, var(--hud-accent, #8be39a) 40%, transparent);
 }
 
 .statusText {

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PROVIDER_REGISTRY } from '@/lib/providers/registry'
-import { Settings, Trash2, CheckCircle2, Circle } from 'lucide-react'
+import { Settings, Trash2, CheckCircle2, Circle, ExternalLink } from 'lucide-react'
 import type { ProviderConfigItem } from '@/stores/provider'
 
 interface ProviderCardProps {
@@ -51,6 +51,14 @@ export function ProviderCard({ config, onConfigure, onClear }: ProviderCardProps
             <Settings className="h-3.5 w-3.5 mr-1" />
             {config.configured ? '修改' : '配置'}
           </Button>
+          {config.docsUrl && (
+            <Button variant="ghost" size="sm" asChild>
+              <a href={config.docsUrl} target="_blank" rel="noreferrer">
+                <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                文档
+              </a>
+            </Button>
+          )}
           {config.configured && (
             <Button
               variant="ghost"

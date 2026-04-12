@@ -3,6 +3,7 @@ import { create } from 'zustand'
 export interface ProviderConfigItem {
   id: string
   configured: boolean
+  docsUrl?: string | null
   values: Record<string, string>
 }
 

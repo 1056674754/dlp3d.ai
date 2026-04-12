@@ -130,7 +130,7 @@ export class AssetManager {
     'zh_male_wennuanahu_moon_bigtt',
     'zh_male_yuanboxiaoshu_moon_bigtts',
   ]
-  public static readonly DEFAULT_TTS_ADAPTER = 'huoshan_v2'
+  public static readonly DEFAULT_TTS_ADAPTER = 'doubao'
   public static readonly DEFAULT_VOICE_NAME = 'BV405_streaming'
   public static readonly NECESSARY_MOTION_TYPES = [
     'long_idle',

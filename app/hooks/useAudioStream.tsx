@@ -13,6 +13,7 @@ import { resolvePublicUrl } from '@/utils/publicUrl'
 
 type PCMChunkMeta = {
   level: number
+  durationSeconds: number
 }
 
 type WorkletAudioMessage = {
@@ -51,6 +52,7 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
     AudioRecordState.NOT_RECORDING,
   )
   const [micLevel, setMicLevel] = useState(0)
+  const [sampleRate, setSampleRate] = useState<number | null>(null)
   const micLevelRef = useRef(0)
   const lastMicLevelEmitAtRef = useRef(0)
 
@@ -133,6 +135,7 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
 
     try {
       console.log('[AudioStream] startRecord requested')
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const audioContext = new AudioContext({
         sampleRate: 16000,
@@ -140,12 +143,17 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
       if (audioContext.state === 'suspended') {
         await audioContext.resume()
       }
+      console.log(
+        `[AudioStream] requested sampleRate=16000, actual sampleRate=${audioContext.sampleRate}`,
+      )
       const workletUrl = resolvePublicUrl('/StreamedAudioProcessor.js')
       console.log(`[AudioStream] loading worklet: ${workletUrl}`)
       await audioContext.audioWorklet.addModule(workletUrl)
 
       const source = audioContext.createMediaStreamSource(stream)
       const workletNode = new AudioWorkletNode(audioContext, 'pcm-processor')
+      let chunkCount = 0
+      let totalDurationSeconds = 0
       workletNode.port.onmessage = (event: MessageEvent<WorkletAudioMessage>) => {
         const payload = event.data
         if (!payload?.buffer) {
@@ -154,14 +162,29 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
         const rawLevel = payload.level ?? 0
         updateMicLevel(rawLevel)
         const newBuffer = new Int16Array(payload.buffer)
-        onPCMData(newBuffer, { level: rawLevel })
+        const effectiveSampleRate =
+          audioContextRef.current?.sampleRate ?? audioContext.sampleRate
+        const durationSeconds =
+          effectiveSampleRate > 0 ? newBuffer.length / effectiveSampleRate : 0
+        chunkCount += 1
+        totalDurationSeconds += durationSeconds
+        if (chunkCount <= 5 || chunkCount % 10 === 0) {
+          console.log(
+            `[AudioStream] pcm chunk=${chunkCount} samples=${newBuffer.length} duration=${durationSeconds.toFixed(3)}s total=${totalDurationSeconds.toFixed(3)}s level=${rawLevel.toFixed(4)}`,
+          )
+        }
+        onPCMData(newBuffer, {
+          level: rawLevel,
+          durationSeconds,
+        })
       }
 
-      source.connect(workletNode).connect(audioContext.destination)
+      source.connect(workletNode)
 
       audioContextRef.current = audioContext
       mediaStreamRef.current = stream
       workletNodeRef.current = workletNode
+      setSampleRate(audioContext.sampleRate)
 
       resetMicLevel()
       setRecordState(AudioRecordState.RECORDING)
@@ -224,7 +247,9 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
    * @returns Promise<void>
    */
   const stopRecord = useCallback(async () => {
-    console.log('[AudioStream] stopRecord requested')
+    console.log(
+      `[AudioStream] stopRecord requested sampleRate=${audioContextRef.current?.sampleRate ?? 'null'} state=${audioContextRef.current?.state ?? 'null'}`,
+    )
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(track => track.stop())
       mediaStreamRef.current = null
@@ -248,6 +273,7 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
       audioContextRef.current = null
     }
 
+    setSampleRate(null)
     resetMicLevel()
     setRecordState(AudioRecordState.NOT_RECORDING)
     eventEmitter.emit(
@@ -288,6 +314,7 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
   return {
     recordState: recordState,
     micLevel: micLevel,
+    sampleRate: sampleRate,
     startRecord: startRecord,
     stopRecord: stopRecord,
     checkDevice: checkDevice,

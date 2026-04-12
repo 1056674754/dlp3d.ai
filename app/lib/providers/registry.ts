@@ -20,6 +20,7 @@ export interface ProviderDefinition {
   label: string
   labelZh: string
   categories: ProviderCategory[]
+  docsUrl: string
   mongoKeys: MongoKeyField[]
   adapterIds: Partial<Record<ProviderCategory, string>>
   adapterOptions?: Partial<Record<ProviderCategory, ProviderAdapterOption[]>>
@@ -35,6 +36,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'OpenAI',
     labelZh: 'OpenAI',
     categories: ['llm', 'asr'],
+    docsUrl: 'https://platform.openai.com/docs/overview',
     mongoKeys: [
       {
         field: 'openai_api_key',
@@ -83,6 +85,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'SenseNova',
     labelZh: '商汤日日新',
     categories: ['tts', 'llm'],
+    docsUrl: 'https://platform.sensenova.cn/product/APIService/document',
     mongoKeys: [
       {
         field: 'sensenova_ak',
@@ -113,6 +116,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'SenseChat',
     labelZh: '商汤 SenseChat',
     categories: ['llm'],
+    docsUrl: 'https://platform.sensenova.cn/product/APIService/document',
     mongoKeys: [
       {
         field: 'sensechat_ak',
@@ -143,6 +147,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'SenseNova Omni',
     labelZh: '商汤日日新 Omni',
     categories: ['llm'],
+    docsUrl: 'https://platform.sensenova.cn/product/APIService/document',
     mongoKeys: [
       {
         field: 'sensenovaomni_ak',
@@ -168,11 +173,12 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     },
     iconPath: '/img/llm/sensenova.png',
   },
-  volcengine: {
-    id: 'volcengine',
-    label: 'Volcengine (Huoshan)',
-    labelZh: '火山引擎',
+  doubao: {
+    id: 'doubao',
+    label: 'Doubao Speech',
+    labelZh: '豆包语音',
     categories: ['tts', 'asr'],
+    docsUrl: 'https://www.volcengine.com/docs/6561/120572',
     mongoKeys: [
       {
         field: 'huoshan_app_id',
@@ -196,14 +202,62 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
         secret: true,
       },
     ],
-    adapterIds: { tts: 'huoshan', asr: 'huoshan' },
+    adapterIds: { tts: 'doubao', asr: 'doubao_realtime_asr' },
     iconPath: '/img/llm/huoshan.png',
   },
-  volcengine_icl: {
-    id: 'volcengine_icl',
-    label: 'Volcengine ICL (Voice Clone)',
-    labelZh: '火山引擎 语音克隆',
+  volcengine_realtime_voice: {
+    id: 'volcengine_realtime_voice',
+    label: 'Volcengine Realtime Dialogue',
+    labelZh: '火山引擎实时语音',
+    categories: ['llm'],
+    docsUrl: 'https://www.volcengine.com/docs/6561/1594356?lang=zh',
+    mongoKeys: [
+      {
+        field: 'volcengine_app_id',
+        label: 'App ID',
+        labelZh: '应用 ID',
+        required: true,
+        secret: false,
+      },
+      {
+        field: 'volcengine_token',
+        label: 'Access Token',
+        labelZh: '访问令牌',
+        required: true,
+        secret: true,
+      },
+      {
+        field: 'volcengine_secret_key',
+        label: 'Secret Key (Optional)',
+        labelZh: '密钥（可选）',
+        required: false,
+        secret: true,
+      },
+    ],
+    adapterIds: { llm: 'volcengine_realtime_voice_agent' },
+    llmFeatureAdapters: {
+      conversation: 'volcengine_realtime_voice_agent',
+    },
+    llmFeatureAdapterOptions: {
+      conversation: [
+        {
+          adapterId: 'volcengine_realtime_voice_agent',
+          label: 'Realtime Dialogue',
+          labelZh: '实时语音对话',
+        },
+      ],
+    },
+    suggestedModels: {
+      llm: ['platform-managed-dialogue-bot'],
+    },
+    iconPath: '/img/llm/huoshan.png',
+  },
+  doubao_icl: {
+    id: 'doubao_icl',
+    label: 'Doubao Speech Clone',
+    labelZh: '豆包语音克隆',
     categories: ['tts'],
+    docsUrl: 'https://www.volcengine.com/docs/6561/120572',
     mongoKeys: [
       {
         field: 'huoshan_app_id',
@@ -220,7 +274,39 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
         secret: true,
       },
     ],
-    adapterIds: { tts: 'huoshan_icl' },
+    adapterIds: { tts: 'doubao_icl' },
+    iconPath: '/img/llm/huoshan.png',
+  },
+  volcengine: {
+    id: 'volcengine',
+    label: 'Volcengine ASR',
+    labelZh: '火山引擎 ASR',
+    categories: ['asr'],
+    docsUrl: 'https://www.volcengine.com/docs/6561/1354869?lang=zh',
+    mongoKeys: [
+      {
+        field: 'volcengine_app_id',
+        label: 'App ID',
+        labelZh: '应用 ID',
+        required: true,
+        secret: false,
+      },
+      {
+        field: 'volcengine_token',
+        label: 'Access Token',
+        labelZh: '访问令牌',
+        required: true,
+        secret: true,
+      },
+      {
+        field: 'volcengine_secret_key',
+        label: 'Secret Key (Optional)',
+        labelZh: '密钥（可选）',
+        required: false,
+        secret: true,
+      },
+    ],
+    adapterIds: { asr: 'volcengine_bigasr' },
     iconPath: '/img/llm/huoshan.png',
   },
   elevenlabs: {
@@ -228,6 +314,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'ElevenLabs',
     labelZh: 'ElevenLabs',
     categories: ['tts'],
+    docsUrl: 'https://elevenlabs.io/docs/introduction',
     mongoKeys: [
       {
         field: 'elevenlabs_api_key',
@@ -247,6 +334,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'SenseNova TTS',
     labelZh: '商汤 TTS',
     categories: ['tts'],
+    docsUrl: 'https://platform.sensenova.cn/product/APIService/document',
     mongoKeys: [
       {
         field: 'sense_tts_api_key',
@@ -264,6 +352,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'Nova TTS',
     labelZh: 'Nova TTS',
     categories: ['tts'],
+    docsUrl: 'https://platform.sensenova.cn/product/APIService/document',
     mongoKeys: [
       {
         field: 'nova_tts_api_key',
@@ -280,6 +369,8 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'SoftSugar',
     labelZh: '绵白糖',
     categories: ['tts'],
+    docsUrl:
+      'https://aigc.softsugar.com/html/help/en-US/9-%E8%AF%AD%E9%9F%B3%E5%A4%84%E7%90%86.html',
     mongoKeys: [
       {
         field: 'softsugar_app_id',
@@ -303,6 +394,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'DeepSeek',
     labelZh: 'DeepSeek',
     categories: ['llm'],
+    docsUrl: 'https://api-docs.deepseek.com/',
     mongoKeys: [
       {
         field: 'deepseek_api_key',
@@ -328,6 +420,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'xAI (Grok)',
     labelZh: 'xAI (Grok)',
     categories: ['llm'],
+    docsUrl: 'https://docs.x.ai/docs/overview',
     mongoKeys: [
       {
         field: 'xai_api_key',
@@ -350,6 +443,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'Anthropic (Claude)',
     labelZh: 'Anthropic (Claude)',
     categories: ['llm'],
+    docsUrl: 'https://docs.anthropic.com/en/api/overview',
     mongoKeys: [
       {
         field: 'anthropic_api_key',
@@ -372,6 +466,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'Google Gemini',
     labelZh: 'Google Gemini',
     categories: ['llm'],
+    docsUrl: 'https://ai.google.dev/gemini-api/docs',
     mongoKeys: [
       {
         field: 'gemini_api_key',
@@ -394,6 +489,7 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
     label: 'Alibaba Bailian (DashScope)',
     labelZh: '阿里百炼',
     categories: ['llm', 'asr'],
+    docsUrl: 'https://help.aliyun.com/zh/model-studio/use-qwen-by-calling-api',
     mongoKeys: [
       {
         field: 'qwen_api_key',

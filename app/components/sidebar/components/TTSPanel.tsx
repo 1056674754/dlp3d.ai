@@ -18,6 +18,18 @@ import Tab from '@mui/material/Tab'
 import Settings from '@mui/icons-material/Settings'
 import { useTranslation } from 'react-i18next'
 import GlobalTooltip from '@/components/common/GlobalTooltip'
+import { getProvider } from '@/lib/providers/registry'
+
+const LEGACY_SPEECH_PROVIDER_MAP: Record<string, string> = {
+  doubao: 'doubao',
+  doubao_icl: 'doubao_icl',
+  volcengine_bigasr: 'volcengine',
+  softsugar: 'softsugar',
+  sensenova: 'sensenova',
+  elevenlabs: 'elevenlabs',
+  openai_realtime: 'openai',
+  qwen_realtime_asr: 'alibaba_bailian',
+}
 /**
  * TTSPanel component.
  *
@@ -49,8 +61,10 @@ export default function TTSPanel() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [key, setKey] = useState('')
   const [key2, setKey2] = useState('')
+  const [key3, setKey3] = useState('')
   const [editTab, setEditTab] = useState('')
   const [editType, setEditType] = useState('')
+  const docsUrl = getProvider(LEGACY_SPEECH_PROVIDER_MAP[editTab] || '')?.docsUrl
 
   /**
    * Handle ASR tab change.
@@ -166,11 +180,13 @@ export default function TTSPanel() {
       if (isAvailable) {
         setKey('******')
         setKey2('******')
+        setKey3('******')
         return
       }
 
       setKey('')
       setKey2('')
+      setKey3('')
     },
     [availableASR, availableTTS],
   )
@@ -247,7 +263,7 @@ export default function TTSPanel() {
     const tabName = editTab.toLowerCase()
 
     switch (tabName) {
-      case 'huoshan':
+      case 'doubao':
         // Only update if not placeholder
         if (key !== '******') {
           await updateUserConfig('huoshan_app_id', key)
@@ -256,13 +272,24 @@ export default function TTSPanel() {
           await updateUserConfig('huoshan_token', key2)
         }
         break
-      case 'huoshan_icl':
+      case 'doubao_icl':
         // Only update if not placeholder
         if (key !== '******') {
           await updateUserConfig('huoshan_app_id', key)
         }
         if (key2 !== '******') {
           await updateUserConfig('huoshan_token', key2)
+        }
+        break
+      case 'volcengine_bigasr':
+        if (key !== '******') {
+          await updateUserConfig('volcengine_app_id', key)
+        }
+        if (key2 !== '******') {
+          await updateUserConfig('volcengine_token', key2)
+        }
+        if (key3 !== '******') {
+          await updateUserConfig('volcengine_secret_key', key3)
         }
         break
       case 'softsugar':
@@ -312,7 +339,7 @@ export default function TTSPanel() {
     const activeAsrData = await fetchGetAvailableASR(settings!.user_id)
     setAvailableTTS(activeTtsData.options)
     setAvailableASR(activeAsrData.options)
-  }, [editTab, key, key2, editType, updateUserConfig, settings])
+  }, [editTab, key, key2, key3, editType, updateUserConfig, settings])
   /**
    * Render the ASR and TTS provider tabs.
    *
@@ -713,7 +740,7 @@ export default function TTSPanel() {
       const tabName = editTab.toLowerCase()
 
       switch (tabName) {
-        case 'huoshan':
+        case 'doubao':
           return (
             <>
               <label
@@ -792,7 +819,7 @@ export default function TTSPanel() {
               />
             </>
           )
-        case 'huoshan_icl':
+        case 'doubao_icl':
           return (
             <>
               <label
@@ -868,6 +895,104 @@ export default function TTSPanel() {
                   e.target.style.borderColor = '#4A4A6A'
                 }}
                 placeholder={`${t('TTSPanel.enter')} key`}
+              />
+            </>
+          )
+        case 'volcengine_bigasr':
+          return (
+            <>
+              <label
+                style={{
+                  display: 'block',
+                  color: '#63667e',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  marginBottom: '8px',
+                  textAlign: 'left',
+                }}
+              >
+                APP ID
+              </label>
+              <input
+                type="text"
+                value={key}
+                onChange={e => setKey(e.target.value)}
+                style={{
+                  width: '100%',
+                  height: '48px',
+                  padding: '0 16px',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #4A4A6A',
+                  borderRadius: '6px',
+                  color: '#E0E0E0',
+                  fontSize: '16px',
+                  marginBottom: '16px',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                }}
+                placeholder={`${t('TTSPanel.enter')} appId`}
+              />
+              <label
+                style={{
+                  display: 'block',
+                  color: '#63667e',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  marginBottom: '8px',
+                  textAlign: 'left',
+                }}
+              >
+                Access Token
+              </label>
+              <input
+                type="text"
+                value={key2}
+                onChange={e => setKey2(e.target.value)}
+                style={{
+                  width: '100%',
+                  height: '48px',
+                  padding: '0 16px',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #4A4A6A',
+                  borderRadius: '6px',
+                  color: '#E0E0E0',
+                  fontSize: '16px',
+                  marginBottom: '16px',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                }}
+                placeholder={`${t('TTSPanel.enter')} accessToken`}
+              />
+              <label
+                style={{
+                  display: 'block',
+                  color: '#63667e',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  marginBottom: '8px',
+                  textAlign: 'left',
+                }}
+              >
+                Secret Key (Optional)
+              </label>
+              <input
+                type="text"
+                value={key3}
+                onChange={e => setKey3(e.target.value)}
+                style={{
+                  width: '100%',
+                  height: '48px',
+                  padding: '0 16px',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #4A4A6A',
+                  borderRadius: '6px',
+                  color: '#E0E0E0',
+                  fontSize: '16px',
+                  marginBottom: '24px',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                }}
+                placeholder={`${t('TTSPanel.enter')} secretKey`}
               />
             </>
           )
@@ -1134,6 +1259,22 @@ export default function TTSPanel() {
             backgroundColor: '#1e202f',
           }}
         >
+          {docsUrl && (
+            <div style={{ marginBottom: '16px', textAlign: 'left' }}>
+              <a
+                href={docsUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  color: '#8ea1ff',
+                  fontSize: '13px',
+                  textDecoration: 'underline',
+                }}
+              >
+                官方文档
+              </a>
+            </div>
+          )}
           {getInputFields()}
           <div
             style={{

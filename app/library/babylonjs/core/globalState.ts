@@ -36,6 +36,7 @@ export class GlobalState {
 
   private _isUserStreaming: boolean = false
   private _micLevel: number = 0
+  audioInputPrebufferChunkCount: number = 48
 
   // PCM queue management methods (will be set by BabylonJSContext)
   flushPCMQueue: (() => Promise<void>) | null = null

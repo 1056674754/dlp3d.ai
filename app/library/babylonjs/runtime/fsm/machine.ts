@@ -99,6 +99,13 @@ export class StateMachine {
    * Event queue for processing conditioned messages.
    */
   private _eventQueue: Queue<ConditionedMessage> = new Queue()
+
+  /**
+   * Timestamp (ms) when we entered WAITING_FOR_USER_STOP_RECORDING.
+   * Used to ignore stale VAD silence events that were queued before the
+   * WebSocket connected and the state machine actually started listening.
+   */
+  private _listeningStateEnteredAt: number = 0
   /**
    * Timestamp when the basic scene was launched.
    */
@@ -1296,7 +1303,10 @@ export class StateMachine {
       // const data = message.data
       return
     }
-    if (message.condition === Conditions.USER_START_RECORDING) {
+    if (
+      message.condition === Conditions.USER_START_RECORDING ||
+      message.condition === Conditions.WAKE_WORD_DETECTED
+    ) {
       const character = this._globalState.characters[0]
       character.runtimeAnimationGroup.switchJointAnimation(
         'listen',
@@ -1315,10 +1325,8 @@ export class StateMachine {
       this._globalState.runtime?.addConditionedMessage(
         new RuntimeConditionedMessage(RuntimeAnimationEvent.RHS_LOOPABLE),
       )
-      const success = await this._startUserAudioStreaming()
-      if (success) {
-        await this._switchState(States.WAITING_FOR_USER_STOP_RECORDING)
-      }
+      await this._switchState(States.WAITING_FOR_USER_STOP_RECORDING)
+      await this._startUserAudioStreaming()
     } else {
       this._logUnexpectedCondition(message)
     }
@@ -1356,7 +1364,23 @@ export class StateMachine {
       this._globalState.runtime?.addConditionedMessage(
         new RuntimeConditionedMessage(RuntimeAnimationEvent.USE_CUBIC_BLEND),
       )
-    } else if (message.condition === Conditions.USER_STOP_RECORDING) {
+    } else if (
+      message.condition === Conditions.USER_STOP_RECORDING ||
+      message.condition === Conditions.NATIVE_VAD_SILENCE
+    ) {
+      Logger.log(
+        `[FSM] stop candidate condition=${Conditions[message.condition]} state=${stateToEnglishName(this._stateValue)} elapsed_since_listening=${Date.now() - this._listeningStateEnteredAt}ms`,
+      )
+      // Grace period: ignore VAD silence that fires within 1.5 s of entering the
+      // listening state.  This catches silence events generated while the
+      // WebSocket was still connecting or from residual noise after the wake word.
+      if (message.condition === Conditions.NATIVE_VAD_SILENCE) {
+        const elapsed = Date.now() - this._listeningStateEnteredAt
+        if (elapsed < 1500) {
+          Logger.log(`[FSM] ignored stale native VAD silence elapsed=${elapsed}ms`)
+          return
+        }
+      }
       // Temporarily skip think animation, directly switch to long IDLE for faster response
       this._globalState.runtime?.addConditionedMessage(
         new RuntimeConditionedMessage(RuntimeAnimationEvent.SOFT_INTERRUPT),
@@ -1401,12 +1425,8 @@ export class StateMachine {
       this._orchestratorStreamingClient?.interrupt()
       this._orchestratorStreamingClient?.dispose()
       this._orchestratorStreamingClient = null
-      // switch local animation to listen
-      const success = await this._startUserAudioStreaming()
-      if (success) {
-        await this._switchState(States.WAITING_FOR_USER_STOP_RECORDING)
-      }
       await this._switchState(States.WAITING_FOR_USER_STOP_RECORDING)
+      await this._startUserAudioStreaming()
     } else if (message === null) {
       if (this._orchestratorStreamingClient === null) {
         Logger.error(i18n.t('fsm.noRunningStreamingClientFound', { ns: 'client' }))
@@ -1849,6 +1869,7 @@ export class StateMachine {
         Logger.warn('Error while updating relationship and emotion')
       }
       await this._switchState(States.IDLE)
+      this._maybeResumeWakeWord()
     }
     if (message.condition === Conditions.USER_INTERRUPT_ANIMATION) {
       this._globalState.runtime?.addConditionedMessage(
@@ -1955,9 +1976,6 @@ export class StateMachine {
         await this._switchState(States.EXIT)
       }
 
-      await this._globalState.audioStreamState?.startRecord()
-      Logger.log('Microphone is now enabled')
-
       this._globalState.runtime?.playAnimation()
       Logger.log('Starting character entrance animation playback')
 
@@ -2040,6 +2058,9 @@ export class StateMachine {
    * @param conditionedMessage The conditioned message to add to the queue.
    */
   public putConditionedMessage(conditionedMessage: ConditionedMessage) {
+    Logger.log(
+      `[FSM] enqueue condition=${Conditions[conditionedMessage.condition]} state=${stateToEnglishName(this._stateValue)}`,
+    )
     this._eventQueue.enqueue(conditionedMessage)
   }
 
@@ -2059,6 +2080,32 @@ export class StateMachine {
   }
 
   /**
+   * Drain stale NATIVE_VAD_SILENCE events from the queue.
+   *
+   * When the wake word is detected, native audio recording starts immediately
+   * while the WebSocket connection is still being established. The native VAD
+   * can fire silence events (from the wake-word trailing pause) before the
+   * state machine enters the listening state. These stale events would
+   * immediately stop streaming if left in the queue.
+   *
+   * This method removes all NATIVE_VAD_SILENCE events while preserving other
+   * event types in their original order.
+   */
+  private _drainStaleVadSilence() {
+    const kept: ConditionedMessage[] = []
+    let msg = this._eventQueue.dequeue()
+    while (msg !== undefined) {
+      if (msg.condition !== Conditions.NATIVE_VAD_SILENCE) {
+        kept.push(msg)
+      }
+      msg = this._eventQueue.dequeue()
+    }
+    for (const m of kept) {
+      this._eventQueue.enqueue(m)
+    }
+  }
+
+  /**
    * Switch to a target state and log the transition.
    *
    * @param targetState The target state to switch to.
@@ -2069,6 +2116,14 @@ export class StateMachine {
     if (targetState !== States.WAITING_FOR_ACTOR_RESPOND_GENERATION_FINISHED) {
       this._resetActorRespondWaitTimer()
     }
+
+    // When entering the listening state, drain stale VAD silence events that
+    // may have been queued while the WebSocket was still connecting.
+    if (targetState === States.WAITING_FOR_USER_STOP_RECORDING) {
+      this._listeningStateEnteredAt = Date.now()
+      this._drainStaleVadSilence()
+    }
+
     this.onStateChangedObservable.notifyObservers()
     let lastStateName
     if (this._lastStateValue !== null) {
@@ -2171,7 +2226,11 @@ export class StateMachine {
     sampleWidth: number = 2,
     frameRate: number = 16000,
   ): Promise<boolean> {
-    this._globalState.updateUserStreamingState(true)
+    const actualFrameRate =
+      this._globalState.audioStreamState?.sampleRate ?? frameRate
+    Logger.debug(
+      `Starting user audio streaming with frameRate=${actualFrameRate} (fallback=${frameRate})`,
+    )
 
     // Clean up old instance if it exists
     if (this._orchestratorStreamingClient) {
@@ -2186,10 +2245,12 @@ export class StateMachine {
       'orchestratorPathPrefix',
       'orchestratorTimeout',
       'orchestratorAudioChatPath',
+      'orchestratorRealtimeAudioChatPath',
       'maxFrontExtensionDuration',
       'maxRearExtensionDuration',
       'userId',
       'characterId',
+      'conversationAdapter',
       'language',
     ]
     const requestDict: Record<string, any> = {}
@@ -2205,20 +2266,36 @@ export class StateMachine {
       this._bufferSizeEstimators['motion'].bufferSize * 30,
     )
 
+    const conversationAdapter = requestDict['conversationAdapter'] || ''
+    const useRealtimeAudioConversation = [
+      'openai_audio_agent',
+      'qwen_omni_realtime_agent',
+      'volcengine_realtime_voice_agent',
+    ].includes(conversationAdapter)
+    this._globalState.audioInputPrebufferChunkCount = useRealtimeAudioConversation
+      ? 32
+      : 48
+    const orchestratorPath = useRealtimeAudioConversation
+      ? requestDict['orchestratorRealtimeAudioChatPath']
+      : requestDict['orchestratorAudioChatPath']
+    Logger.debug(
+      `Audio chat routing: adapter=${conversationAdapter || '(empty)'} path=${orchestratorPath} prebufferChunks=${this._globalState.audioInputPrebufferChunkCount}`,
+    )
+
     // Create new instance
     const newClient = new OrchestratorClient(
       this._globalState,
       requestDict['orchestratorHost'],
       requestDict['orchestratorPort'],
       requestDict['orchestratorPathPrefix'],
-      requestDict['orchestratorAudioChatPath'],
+      orchestratorPath,
       {
         appName: 'babylon',
         maxFrontExtensionDuration: requestDict['maxFrontExtensionDuration'],
         maxRearExtensionDuration: requestDict['maxRearExtensionDuration'],
         nChannels: nChannels,
         sampleWidth: sampleWidth,
-        frameRate: frameRate,
+        frameRate: actualFrameRate,
         language: requestDict['language'],
         userId: requestDict['userId'],
         characterId: requestDict['characterId'],
@@ -2233,6 +2310,10 @@ export class StateMachine {
     this._orchestratorStreamingClient = newClient
     await newClient.resetRuntimeStreamed()
     await newClient.run()
+    await this._globalState.audioStreamState?.startRecord()
+    Logger.log('Microphone is now enabled for user streaming turn')
+    this._globalState.updateUserStreamingState(true)
+    Logger.debug('User audio streaming enabled after orchestrator websocket ready')
 
     return true
   }
@@ -2247,6 +2328,7 @@ export class StateMachine {
     // just-finished utterance before we stop accepting streamed chunks.
     await new Promise(resolve => setTimeout(resolve, 140))
     this._globalState.updateUserStreamingState(false)
+    await this._globalState.audioStreamState?.stopRecord()
     const message = `User stopped audio streaming`
     Logger.debug(message)
 
@@ -2265,6 +2347,18 @@ export class StateMachine {
 
     // Send stop streaming message to server
     await this._orchestratorStreamingClient?.sendStopAudioStreamingMessage()
+  }
+
+  private _maybeResumeWakeWord() {
+    if (typeof window === 'undefined') return
+    const w = window as unknown as {
+      NativeAPI?: {
+        sendEvent: (type: string, payload: Record<string, never>) => void
+      }
+    }
+    if (w.NativeAPI) {
+      w.NativeAPI.sendEvent('voice:resumeListening', {})
+    }
   }
 
   /**

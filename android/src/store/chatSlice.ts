@@ -31,6 +31,7 @@ function mergeChatConfig(
     updatedAt: hasText(incoming.updatedAt)
       ? incoming.updatedAt
       : existing.updatedAt,
+    wakeWord: hasText(incoming.wakeWord) ? incoming.wakeWord : existing.wakeWord,
   };
 }
 
@@ -97,8 +98,9 @@ export const chatSlice = createSlice({
       state.loadingProgress = payload;
     },
     setChatList: (state, { payload }: PayloadAction<CharacterConfig[]>) => {
+      const currentChatList = Array.isArray(state.chatList) ? state.chatList : [];
       const existingById = new Map(
-        state.chatList.map(chat => [chat.characterId, chat]),
+        currentChatList.map(chat => [chat.characterId, chat]),
       );
       state.chatList = payload.map(chat =>
         mergeChatConfig(existingById.get(chat.characterId), chat),
@@ -114,9 +116,10 @@ export const chatSlice = createSlice({
       state,
       { payload }: PayloadAction<CharacterConfig | null>,
     ) => {
+      const currentChatList = Array.isArray(state.chatList) ? state.chatList : [];
       state.selectedChat = payload
         ? mergeChatConfig(
-            state.chatList.find(
+            currentChatList.find(
               chat => chat.characterId === payload.characterId,
             ),
             payload,
@@ -129,6 +132,12 @@ export const chatSlice = createSlice({
     ) => {
       if (!payload.characterId) {
         return;
+      }
+      if (
+        !state.lastUsedAtByCharacterId ||
+        typeof state.lastUsedAtByCharacterId !== 'object'
+      ) {
+        state.lastUsedAtByCharacterId = {};
       }
       state.lastUsedAtByCharacterId[payload.characterId] =
         payload.usedAt ?? Date.now();

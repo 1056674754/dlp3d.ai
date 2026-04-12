@@ -23,6 +23,7 @@ export class ConfigSync {
     orchestratorPort: 0,
     orchestratorPathPrefix: '/dlp3d-ai/orchestrator',
     orchestratorAudioChatPath: 'audio_chat_with_text_llm',
+    orchestratorRealtimeAudioChatPath: 'audio_chat_with_audio_llm',
     orchestratorTextChatPath: 'text_chat_with_text_llm',
     orchestratorDirectStreamingPath: 'text_generate',
     orchestratorMotionSettingsPath: 'get_motion_settings',
@@ -40,6 +41,7 @@ export class ConfigSync {
     firstBodyFastResponse: false,
     userId: 'default_user',
     characterId: 'default_character_1',
+    conversationAdapter: '',
     language: 'zh',
   }
 
