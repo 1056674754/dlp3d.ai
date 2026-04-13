@@ -155,6 +155,11 @@ export class StateMachine {
    */
   private _sleepTimeInSeconds: number = 0.1
   /**
+   * Set to true when user releases before microphone setup completes.
+   * Checked between async stages in _startUserAudioStreaming() to abort early.
+   */
+  private _startRecordingAborted: boolean = false
+  /**
    * Timestamp when the current actor response wait cycle started.
    */
   private _actorRespondWaitStartedAtInMilliSeconds: number | null = null
@@ -1326,7 +1331,23 @@ export class StateMachine {
         new RuntimeConditionedMessage(RuntimeAnimationEvent.RHS_LOOPABLE),
       )
       await this._switchState(States.WAITING_FOR_USER_STOP_RECORDING)
-      await this._startUserAudioStreaming()
+      this._startRecordingAborted = false
+      const started = await this._startUserAudioStreaming()
+      if (!started || this._startRecordingAborted) {
+        this._globalState.updateUserStreamingState(false)
+        this._drainEventQueue()
+        await this._switchState(States.IDLE)
+        await this._globalState.audioStreamState?.stopRecord()
+        await this._orchestratorStreamingClient?.interrupt()
+        this._globalState.webSocketState?.disconnectWebSocket()
+        this._globalState.runtime?.addConditionedMessage(
+          new RuntimeConditionedMessage(RuntimeAnimationEvent.SOFT_INTERRUPT),
+        )
+        this._globalState.runtime?.addConditionedMessage(
+          new RuntimeConditionedMessage(RuntimeAnimationEvent.USE_CUBIC_BLEND),
+        )
+        return
+      }
     } else {
       this._logUnexpectedCondition(message)
     }
@@ -1426,7 +1447,16 @@ export class StateMachine {
       this._orchestratorStreamingClient?.dispose()
       this._orchestratorStreamingClient = null
       await this._switchState(States.WAITING_FOR_USER_STOP_RECORDING)
-      await this._startUserAudioStreaming()
+      this._startRecordingAborted = false
+      const started = await this._startUserAudioStreaming()
+      if (!started || this._startRecordingAborted) {
+        this._globalState.updateUserStreamingState(false)
+        this._drainEventQueue()
+        await this._switchState(States.IDLE)
+        await this._globalState.audioStreamState?.stopRecord()
+        this._globalState.webSocketState?.disconnectWebSocket()
+        return
+      }
     } else if (message === null) {
       if (this._orchestratorStreamingClient === null) {
         Logger.error(i18n.t('fsm.noRunningStreamingClientFound', { ns: 'client' }))
@@ -1812,9 +1842,17 @@ export class StateMachine {
       this._globalState.runtime?.addConditionedMessage(
         new RuntimeConditionedMessage(RuntimeAnimationEvent.USE_CUBIC_BLEND),
       )
+      this._startRecordingAborted = false
       const success = await this._startUserAudioStreaming()
-      if (success) {
+      if (success && !this._startRecordingAborted) {
         await this._switchState(States.WAITING_FOR_USER_STOP_RECORDING)
+      } else {
+        this._globalState.updateUserStreamingState(false)
+        this._drainEventQueue()
+        await this._switchState(States.IDLE)
+        await this._globalState.audioStreamState?.stopRecord()
+        await this._orchestratorStreamingClient?.interrupt()
+        this._globalState.webSocketState?.disconnectWebSocket()
       }
     } else {
       this._logUnexpectedCondition(message)
@@ -2061,6 +2099,12 @@ export class StateMachine {
     Logger.log(
       `[FSM] enqueue condition=${Conditions[conditionedMessage.condition]} state=${stateToEnglishName(this._stateValue)}`,
     )
+    if (
+      conditionedMessage.condition === Conditions.USER_STOP_RECORDING &&
+      this._stateValue === States.WAITING_FOR_USER_STOP_RECORDING
+    ) {
+      this._startRecordingAborted = true
+    }
     this._eventQueue.enqueue(conditionedMessage)
   }
 
@@ -2105,6 +2149,13 @@ export class StateMachine {
     }
   }
 
+  private _drainEventQueue() {
+    let msg = this._eventQueue.dequeue()
+    while (msg !== undefined) {
+      msg = this._eventQueue.dequeue()
+    }
+  }
+
   /**
    * Switch to a target state and log the transition.
    *
@@ -2143,7 +2194,8 @@ export class StateMachine {
   private async _logUnexpectedCondition(conditionMsg: ConditionedMessage) {
     if (
       conditionMsg.condition === Conditions.JOINT_ANIMATION_FINISHED ||
-      conditionMsg.condition === Conditions.MORPH_ANIMATION_FINISHED
+      conditionMsg.condition === Conditions.MORPH_ANIMATION_FINISHED ||
+      conditionMsg.condition === Conditions.ANIMATION_FINISHED
     ) {
       return
     }
@@ -2309,8 +2361,14 @@ export class StateMachine {
     // Assign new instance and start it
     this._orchestratorStreamingClient = newClient
     await newClient.resetRuntimeStreamed()
+    if (this._startRecordingAborted) return false
     await newClient.run()
+    if (this._startRecordingAborted) return false
     await this._globalState.audioStreamState?.startRecord()
+    if (this._startRecordingAborted) {
+      await this._globalState.audioStreamState?.stopRecord()
+      return false
+    }
     Logger.log('Microphone is now enabled for user streaming turn')
     this._globalState.updateUserStreamingState(true)
     Logger.debug('User audio streaming enabled after orchestrator websocket ready')

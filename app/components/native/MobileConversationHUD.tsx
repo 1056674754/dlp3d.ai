@@ -75,7 +75,7 @@ function getDescriptor(args: {
     }
   }
 
-  if (isUserStreaming || stateValue === States.WAITING_FOR_USER_STOP_RECORDING) {
+  if (isUserStreaming) {
     return {
       phase: 'recording',
       statusLabel: 'REC',
@@ -86,14 +86,25 @@ function getDescriptor(args: {
     }
   }
 
+  if (stateValue === States.WAITING_FOR_USER_STOP_RECORDING) {
+    return {
+      phase: 'pressing',
+      statusLabel: 'CONNECTING',
+      eyebrow: 'Listening',
+      title: '正在连接麦克风',
+      hint: '连接中，请稍候…',
+      accent: '#8fd1ff',
+    }
+  }
+
   if (isPressing) {
     return {
       phase: 'pressing',
-      statusLabel: 'REC',
+      statusLabel: 'CONNECTING',
       eyebrow: 'Listening',
-      title: '正在开始聆听',
-      hint: '继续说，松开后发送，本轮内容会立即开始处理。',
-      accent: '#ff8da1',
+      title: '正在连接麦克风',
+      hint: '连接中，请稍候…',
+      accent: '#8fd1ff',
     }
   }
 
@@ -232,6 +243,13 @@ export default function MobileConversationHUD() {
     }
     const onUserStreamingChanged = (next: boolean) => {
       setIsUserStreaming(next)
+      if (next) {
+        try {
+          window.ReactNativeWebView?.postMessage(
+            JSON.stringify({ type: 'haptic:vibrate' }),
+          )
+        } catch {}
+      }
     }
     const onMicLevelChanged = (next: number) => {
       setMicLevel(next)
@@ -426,15 +444,17 @@ export default function MobileConversationHUD() {
   }
 
   const buttonLabel =
-    descriptor.phase === 'recording' || descriptor.phase === 'pressing'
+    descriptor.phase === 'recording'
       ? '松开'
-      : canInterrupt
-        ? '打断'
-        : descriptor.phase === 'thinking' || descriptor.phase === 'booting'
-          ? '等待中'
-          : descriptor.phase === 'error'
-            ? '重试'
-            : '说话'
+      : descriptor.phase === 'pressing'
+        ? '取消'
+        : canInterrupt
+          ? '打断'
+          : descriptor.phase === 'thinking' || descriptor.phase === 'booting'
+            ? '等待中'
+            : descriptor.phase === 'error'
+              ? '重试'
+              : '说话'
 
   const buttonGlyph =
     descriptor.phase === 'recording' || descriptor.phase === 'pressing'
