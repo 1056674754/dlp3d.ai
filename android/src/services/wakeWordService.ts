@@ -1,20 +1,16 @@
 /**
  * WakeWordService
  *
- * Manages wake word detection using Vosk grammar mode.
- * Loads the Chinese Vosk model, starts continuous listening with a configurable
- * grammar, and forwards detected wake words to the WebView layer via the bridge.
+ * Manages wake word detection using Sherpa-ONNX Keyword Spotter (KWS).
+ * Loads a small zipformer transducer model trained on WenetSpeech for Chinese
+ * keyword spotting, runs continuous AudioRecord in a native background thread,
+ * and forwards detected wake words to the WebView layer via the bridge.
  *
  * Architecture:
- *   Mic → Vosk (grammar mode) → onResult → bridge.send('voice:wake') → WebView
- *
- * References:
- *   - Vosk grammar mode: https://github.com/alphacep/vosk-api/issues/107
- *   - openclaw-assistant production implementation: github.com/yuga-hashimoto/openclaw-assistant
+ *   Mic → Sherpa-ONNX KWS (native) → onKwsDetected event → bridge.send('voice:wake') → WebView
  */
 
-import { Platform } from 'react-native';
-import * as Vosk from 'react-native-vosk';
+import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 import { bridge } from '@/bridge/WebViewBridge';
 import { store } from '@/store';
 import {
@@ -31,25 +27,56 @@ import {
   isNativeAudioAvailable,
 } from '@/services/audioStreamService';
 
-/** Model name used with StorageService.unpack (assets subfolder name). */
-const VOSK_MODEL_NAME = 'model-small-cn-0.22';
+/** Sherpa-ONNX KWS native module. */
+const { Kws } = NativeModules;
 
-/** How long (ms) Vosk listens before auto-restarting to mitigate memory leaks.
- *  openclaw-assistant uses 5 minutes; we use 3 minutes for safety margin.
- */
-const WATCHDOG_TIMEOUT_MS = 3 * 60 * 1000;
-
-/** Minimum confidence threshold for a wake word detection to be accepted. */
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.5;
-
-/** Subscriptions to Vosk events, cleaned up on stop. */
-let subscriptions: Array<{ remove: () => void }> = [];
+/** Event emitter for KWS detection events. */
+let kwsEmitter: NativeEventEmitter | null = null;
+let detectionSubscription: { remove: () => void } | null = null;
 
 /** Watchdog timer handle. */
 let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** How long (ms) KWS listens before auto-restarting to mitigate memory leaks. */
+const WATCHDOG_TIMEOUT_MS = 3 * 60 * 1000;
+
 /** Whether the service is currently in the process of starting (to prevent double-start). */
 let isStarting = false;
+
+// ---------------------------------------------------------------------------
+// Pre-encoded keyword mapping
+// ---------------------------------------------------------------------------
+
+/**
+ * Map of Chinese wake words to their ppinyin-encoded format for the
+ * Sherpa-ONNX KWS zipformer wenetspeech model.
+ *
+ * Format: space-separated pinyin initials + finals with tone marks, separated by spaces
+ * Multiple keywords separated by "/" (slash) per sherpa-onnx convention.
+ *
+ * The @ symbol followed by Chinese text is the display name returned on detection.
+ */
+const KEYWORD_ENCODING_MAP: Record<string, string> = {
+  '嘿你好': 'h ēi n ǐ h ǎo @嘿你好',
+  '你好': 'n ǐ h ǎo @你好',
+};
+
+/**
+ * Encode a list of Chinese keywords into the ppinyin format expected by the KWS model.
+ * Keywords that are not in the pre-encoded map are silently skipped.
+ */
+function encodeKeywords(keywords: string[]): string {
+  const encoded: string[] = [];
+  for (const kw of keywords) {
+    const trimmed = kw.trim();
+    if (KEYWORD_ENCODING_MAP[trimmed]) {
+      encoded.push(KEYWORD_ENCODING_MAP[trimmed]);
+    } else {
+      pushDebugLog('wake', `Keyword "${trimmed}" has no ppinyin encoding, skipping`);
+    }
+  }
+  return encoded.join('/');
+}
 
 // ---------------------------------------------------------------------------
 // Wake word resolution
@@ -77,40 +104,45 @@ function resolveEffectiveKeywords(): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Public API (same interface as before)
 // ---------------------------------------------------------------------------
 
 /**
- * Load the Vosk model. Must be called before `startListening`.
- * The model is unpacked from assets to the app's internal storage by Vosk's
- * StorageService.
+ * Load the Sherpa-ONNX KWS model. Must be called before `startListening`.
+ * The model is loaded from assets by the native module.
  */
 export async function loadWakeWordModel(): Promise<void> {
   if (Platform.OS !== 'android') {
     pushDebugLog('wake', 'Wake word only supported on Android');
     return;
   }
+  if (!Kws) {
+    pushDebugLog('wake', 'KWS native module not available');
+    store.dispatch(setWakeWordError('KWS native module not available'));
+    return;
+  }
 
   try {
-    pushDebugLog('wake', `Loading Vosk model: ${VOSK_MODEL_NAME}`);
-    await Vosk.loadModel(VOSK_MODEL_NAME);
+    pushDebugLog('wake', 'Loading Sherpa-ONNX KWS model...');
+    await Kws.loadModel();
     store.dispatch(setWakeWordModelLoaded(true));
-    pushDebugLog('wake', 'Vosk model loaded successfully');
+    pushDebugLog('wake', 'Sherpa-ONNX KWS model loaded successfully');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     store.dispatch(setWakeWordError(msg));
     store.dispatch(setWakeWordModelLoaded(false));
-    pushDebugLog('wake', `Failed to load Vosk model: ${msg}`);
+    pushDebugLog('wake', `Failed to load KWS model: ${msg}`);
   }
 }
 
 /**
- * Start continuous wake word listening in grammar mode.
- * Only the configured wake words will be recognised; everything else
- * is absorbed by the `[unk]` token.
+ * Start continuous wake word listening.
+ * Keywords are encoded to ppinyin format and passed to the native KWS module.
+ * Detection events are forwarded via NativeEventEmitter.
  */
 export async function startWakeWordListening(): Promise<void> {
   if (Platform.OS !== 'android') return;
+  if (!Kws) return;
   if (isStarting) return;
 
   const state = store.getState().wakeWord;
@@ -124,20 +156,20 @@ export async function startWakeWordListening(): Promise<void> {
 
   try {
     const wakeWords = resolveEffectiveKeywords();
-    const grammar = [...wakeWords, '[unk]'];
+    const encodedKeywords = encodeKeywords(wakeWords);
 
-    pushDebugLog(
-      'wake',
-      `Starting wake word detection: [${wakeWords.join(', ')}]`,
-    );
+    if (!encodedKeywords) {
+      pushDebugLog('wake', 'No valid encoded keywords available, cannot start listening');
+      store.dispatch(setWakeWordError('No valid keywords'));
+      return;
+    }
 
-    // Subscribe to Vosk events before starting
-    subscribeToVoskEvents();
+    pushDebugLog('wake', `Starting KWS detection: [${wakeWords.join(', ')}] (encoded: ${encodedKeywords})`);
 
-    await Vosk.start({
-      grammar,
-      // No timeout — we manage our own watchdog
-    });
+    // Subscribe to detection events before starting
+    subscribeToDetectionEvents();
+
+    await Kws.startListening(encodedKeywords);
 
     store.dispatch(setWakeWordListening(true));
     store.dispatch(setWakeWordError(null));
@@ -146,7 +178,7 @@ export async function startWakeWordListening(): Promise<void> {
     const msg = e instanceof Error ? e.message : String(e);
     store.dispatch(setWakeWordError(msg));
     store.dispatch(setWakeWordListening(false));
-    pushDebugLog('wake', `Failed to start listening: ${msg}`);
+    pushDebugLog('wake', `Failed to start KWS listening: ${msg}`);
   } finally {
     isStarting = false;
   }
@@ -157,11 +189,11 @@ export async function startWakeWordListening(): Promise<void> {
  */
 export function stopWakeWordListening(): void {
   clearWatchdog();
-  unsubscribeFromVoskEvents();
-  try {
-    Vosk.stop();
-  } catch {
-    // Ignore — may already be stopped
+  unsubscribeFromDetectionEvents();
+  if (Kws) {
+    Kws.stopListening().catch(() => {
+      // Ignore — may already be stopped
+    });
   }
   store.dispatch(setWakeWordListening(false));
   isStarting = false;
@@ -169,21 +201,30 @@ export function stopWakeWordListening(): void {
 }
 
 /**
- * Unload the Vosk model and release all resources.
+ * Unload the KWS model and release all resources.
  */
 export function unloadWakeWordModel(): void {
   stopWakeWordListening();
-  try {
-    Vosk.unload();
-  } catch {
-    // Ignore
+  if (Kws) {
+    Kws.unload().catch(() => {
+      // Ignore
+    });
   }
   store.dispatch(setWakeWordModelLoaded(false));
-  pushDebugLog('wake', 'Vosk model unloaded');
+  pushDebugLog('wake', 'KWS model unloaded');
 }
 
+/**
+ * Resume wake word listening after a conversation ends.
+ * Stops the native audio stream first, then restarts KWS if enabled.
+ */
 export async function resumeAfterConversation(): Promise<void> {
   await stopNativeAudioStream();
+
+  // Wait 1 second for character audio to stop playing and mic to settle.
+  // Without this delay, KWS can falsely detect residual speaker audio or
+  // transition noise as a wake word.
+  await new Promise(resolve => setTimeout(resolve, 1000));
 
   const state = store.getState().wakeWord;
   if (state.isEnabled && state.modelLoaded) {
@@ -192,96 +233,62 @@ export async function resumeAfterConversation(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Vosk event handling
+// Detection event handling
 // ---------------------------------------------------------------------------
 
-function subscribeToVoskEvents(): void {
-  // Clean up any existing subscriptions first
-  unsubscribeFromVoskEvents();
+function subscribeToDetectionEvents(): void {
+  unsubscribeFromDetectionEvents();
 
-  // Result event — fired when a complete utterance is recognised
-  subscriptions.push(
-    Vosk.onResult((resultText: string) => {
-      handleVoskResult(resultText);
-    }),
-  );
+  if (!Kws) return;
 
-  // Partial result — useful for debug but we don't act on partials
-  subscriptions.push(
-    Vosk.onPartialResult((partial: string) => {
-      // Only log in debug mode to avoid spamming
-      if (__DEV__) {
-        pushDebugLog('wake', `Partial: ${partial}`);
-      }
-    }),
-  );
+  if (!kwsEmitter) {
+    kwsEmitter = new NativeEventEmitter(Kws);
+  }
 
-  // Error handling
-  subscriptions.push(
-    Vosk.onError((error: string) => {
-      pushDebugLog('wake', `Vosk error: ${error}`);
-      store.dispatch(setWakeWordError(error));
-    }),
-  );
-
-  // Timeout — restart if we're still supposed to be listening
-  subscriptions.push(
-    Vosk.onTimeout(() => {
-      pushDebugLog('wake', 'Vosk timeout — restarting');
-      restartListening();
-    }),
+  detectionSubscription = kwsEmitter.addListener(
+    'onKwsDetected',
+    (event: { keyword: string }) => {
+      handleKwsDetection(event.keyword);
+    },
   );
 }
 
-function unsubscribeFromVoskEvents(): void {
-  subscriptions.forEach(s => {
-    try {
-      s.remove();
-    } catch {
-      // Ignore
-    }
-  });
-  subscriptions = [];
+function unsubscribeFromDetectionEvents(): void {
+  if (detectionSubscription) {
+    detectionSubscription.remove();
+    detectionSubscription = null;
+  }
 }
 
 /**
- * Parse a Vosk result string and check if a configured wake word was detected.
+ * Handle a detected keyword from the KWS native module.
  *
- * Vosk grammar mode returns JSON like: {"text": "你好小智"}
- * Confidence is also embedded when available: {"text": "你好 小智", "confidence": 0.87}
+ * 1. Dispatch to Redux
+ * 2. Stop KWS (release microphone)
+ * 3. Wait 300ms for mic handoff
+ * 4. Start native audio stream for conversation
+ * 5. Send bridge event to WebView
  */
-async function handleVoskResult(resultText: string): Promise<void> {
+async function handleKwsDetection(keyword: string): Promise<void> {
   const state = store.getState().wakeWord;
   if (!state.isListening) return;
 
-  // The Kotlin layer (VoskModule.onResult) already extracts the "text" field
-  // from the Vosk hypothesis JSON — resultText is the plain recognised string,
-  // e.g. "嘿你好" or "[unk]", NOT raw JSON.
-  const text = resultText.trim();
-  if (!text || text === '[unk]') return;
+  pushDebugLog('wake', `Wake word detected: "${keyword}"`);
 
-  const effectiveKeywords = resolveEffectiveKeywords();
-  const lowerText = text.toLowerCase().replace(/\s+/g, '');
-  const matchedKeyword = effectiveKeywords.find(kw =>
-    lowerText.includes(kw.toLowerCase().replace(/\s+/g, '')),
-  );
+  store.dispatch(setWakeWordDetected(keyword));
 
-  if (!matchedKeyword) return;
+  // Send bridge event FIRST so the FSM transitions to WAITING_FOR_USER_STOP_RECORDING
+  // before any NATIVE_VAD_SILENCE events arrive from the audio stream.
+  bridge.send({
+    type: 'voice:wake',
+    payload: { keyword, confidence: 1.0 },
+  });
 
-  pushDebugLog(
-    'wake',
-    `Wake word detected: "${matchedKeyword}" (raw: "${text}")`,
-  );
-
-  store.dispatch(setWakeWordDetected(matchedKeyword));
-
-  // Stop Vosk and start native audio stream for conversation
-  // Vosk and AudioStream share the microphone — can't run both
+  // Stop KWS and start native audio stream for conversation
+  // KWS and AudioStream share the microphone — can't run both
   stopWakeWordListening();
 
-  // Wait for Vosk to fully release the microphone before starting AudioRecord.
-  // Without this delay, AudioRecord may capture stale data from Vosk's buffer
-  // or fail to initialize properly because the mic hardware is still in transition.
+  // Wait for KWS to fully release the microphone before starting AudioRecord.
   await new Promise(resolve => setTimeout(resolve, 300));
 
   if (isNativeAudioAvailable()) {
@@ -289,21 +296,16 @@ async function handleVoskResult(resultText: string): Promise<void> {
       pushDebugLog('wake', `Failed to start native audio: ${e}`);
     });
   }
-
-  bridge.send({
-    type: 'voice:wake',
-    payload: { keyword: matchedKeyword, confidence: 1.0 },
-  });
 }
 
 // ---------------------------------------------------------------------------
-// Watchdog — periodic restart to mitigate Vosk memory leaks
+// Watchdog — periodic restart to mitigate potential memory leaks
 // ---------------------------------------------------------------------------
 
 function startWatchdog(): void {
   clearWatchdog();
   watchdogTimer = setTimeout(() => {
-    pushDebugLog('wake', 'Watchdog triggered — restarting Vosk');
+    pushDebugLog('wake', 'Watchdog triggered — restarting KWS');
     restartListening();
   }, WATCHDOG_TIMEOUT_MS);
 }
@@ -320,12 +322,7 @@ async function restartListening(): Promise<void> {
   if (!state.isListening) return;
 
   // Stop current session
-  try {
-    Vosk.stop();
-  } catch {
-    // Ignore
-  }
-  unsubscribeFromVoskEvents();
+  stopWakeWordListening();
 
   // Brief pause to allow cleanup
   await new Promise(resolve => setTimeout(resolve, 300));

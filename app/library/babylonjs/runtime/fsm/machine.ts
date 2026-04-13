@@ -1730,6 +1730,7 @@ export class StateMachine {
     if (message.condition === Conditions.ANIMATION_FINISHED) {
       this._setRecordAudioButtonEnabled(true)
       await this._switchState(States.IDLE)
+      this._maybeResumeWakeWord()
     } else {
       this._logUnexpectedCondition(message)
     }
@@ -2238,6 +2239,14 @@ export class StateMachine {
       conditionMsg.condition === Conditions.JOINT_ANIMATION_FINISHED ||
       conditionMsg.condition === Conditions.MORPH_ANIMATION_FINISHED ||
       conditionMsg.condition === Conditions.ANIMATION_FINISHED
+    ) {
+      return
+    }
+
+    // Silently ignore stale native events that arrive after state transitions
+    if (
+      conditionMsg.condition === Conditions.NATIVE_VAD_SILENCE ||
+      conditionMsg.condition === Conditions.WAKE_WORD_DETECTED
     ) {
       return
     }
