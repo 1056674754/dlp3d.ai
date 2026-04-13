@@ -39,6 +39,7 @@ import {
   resetStartupMetrics,
 } from '@/utils/startupProfiler';
 import { paperButtonFontScalingProps } from '@/theme/fontScaling';
+import { useWakeWord } from '@/hooks/useWakeWord';
 
 const LOCAL_WEB_BASE =
   Platform.OS === 'android'
@@ -88,6 +89,10 @@ export function DLP3DWebView({
   /** APK 未打入 assets/web/ 时 file:// 会 ERR_FILE_NOT_FOUND，改加载 Settings 里的站点根（HTTPS） */
   const [remoteEmbedAfterFileError, setRemoteEmbedAfterFileError] =
     useState(false);
+
+  // Wake word lifecycle: keep hook mounted for entire conversation so model
+  // loading and listening survive navigation away from Settings screen.
+  useWakeWord();
 
   const configuredServerUrl = useSelector(
     (state: RootState) => state.app.serverUrl,
