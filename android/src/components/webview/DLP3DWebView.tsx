@@ -12,6 +12,7 @@ import {
   StyleSheet,
   Text,
   Platform,
+  Vibration,
 } from 'react-native';
 import { WebView, WebViewNavigation } from 'react-native-webview';
 import { useTheme, Button } from 'react-native-paper';
@@ -543,6 +544,8 @@ export function DLP3DWebView({
             'web',
             `[${p?.level || 'log'}] ${String(p?.message || '').slice(0, 240)}`,
           );
+        } else if (t === 'haptic:vibrate') {
+          Vibration.vibrate(30);
         } else if (t === 'chat:list:updated') {
           pushDebugLog(
             'bridge',
