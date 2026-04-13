@@ -391,7 +391,6 @@ export default function MobileConversationHUD() {
       return
     }
 
-    clearHoldTimer()
     hasStartedRecordingRef.current = false
     setIsPressing(true)
     if (event) {
@@ -402,13 +401,10 @@ export default function MobileConversationHUD() {
         // Android WebView may fail to capture in edge cases; global listeners still backstop release.
       }
     }
-    holdTimerRef.current = setTimeout(() => {
-      stateMachineRef.current?.putConditionedMessage(
-        new ConditionedMessage(Conditions.USER_START_RECORDING, null),
-      )
-      hasStartedRecordingRef.current = true
-      holdTimerRef.current = null
-    }, 180)
+    stateMachineRef.current?.putConditionedMessage(
+      new ConditionedMessage(Conditions.USER_START_RECORDING, null),
+    )
+    hasStartedRecordingRef.current = true
   }
 
   const finishHold = () => {

@@ -14,6 +14,7 @@ import {
   AudioStreamState,
   AudioRecordState,
 } from '@/data_structures/audioStreamState'
+import { WsConnectionPool } from '@/library/babylonjs/runtime/stream/wsConnectionPool'
 
 /**
  * GlobalState
@@ -33,6 +34,7 @@ export class GlobalState {
   private _webSocketState: WebSocketState | null = null
   audioStreamState: AudioStreamState | null = null
   stateMachine: StateMachine | null = null
+  wsConnectionPool: WsConnectionPool = new WsConnectionPool()
 
   private _isUserStreaming: boolean = false
   private _micLevel: number = 0

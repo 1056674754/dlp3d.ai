@@ -67,6 +67,13 @@ export interface AudioStreamState {
    */
   stopRecord: () => Promise<void>
   /**
+   * Pre-warm the AudioContext and AudioWorklet module without accessing the microphone.
+   * Call during IDLE state to reduce latency when startRecord() is invoked later.
+   *
+   * @returns Promise<void> Resolves when pre-warming is complete.
+   */
+  prewarm: () => Promise<void>
+  /**
    * Check for microphone availability and permission status.
    *
    * @returns Promise<AudioRecordState> The resulting availability/permission state.

@@ -55,6 +55,8 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
   const [sampleRate, setSampleRate] = useState<number | null>(null)
   const micLevelRef = useRef(0)
   const lastMicLevelEmitAtRef = useRef(0)
+  const prewarmedContextRef = useRef<AudioContext | null>(null)
+  const prewarmedWorkletUrlRef = useRef<string | null>(null)
 
   const eventEmitter = useRef(
     new EventEmitter<StreamedAudioEvents, StreamedAudioEventPayloads>(),
@@ -122,6 +124,28 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
     }
   }, [])
 
+  const prewarm = useCallback(async () => {
+    if (prewarmedContextRef.current) return
+    try {
+      console.log('[AudioStream] prewarming AudioContext + AudioWorklet')
+      const ctx = new AudioContext({ sampleRate: 16000 })
+      const workletUrl = resolvePublicUrl('/StreamedAudioProcessor.js')
+      await ctx.audioWorklet.addModule(workletUrl)
+      prewarmedContextRef.current = ctx
+      prewarmedWorkletUrlRef.current = workletUrl
+      console.log(
+        `[AudioStream] prewarm complete, sampleRate=${ctx.sampleRate}, worklet loaded`,
+      )
+    } catch (err) {
+      console.warn(
+        '[AudioStream] prewarm failed, will create fresh on startRecord:',
+        err,
+      )
+      prewarmedContextRef.current = null
+      prewarmedWorkletUrlRef.current = null
+    }
+  }, [])
+
   /**
    * Start capturing microphone audio and emit PCM frames via onPCMData.
    * Sets up an AudioContext at 16 kHz and an AudioWorklet "pcm-processor".
@@ -137,18 +161,35 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
       console.log('[AudioStream] startRecord requested')
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const audioContext = new AudioContext({
-        sampleRate: 16000,
-      })
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume()
+
+      let audioContext: AudioContext
+      if (prewarmedContextRef.current) {
+        audioContext = prewarmedContextRef.current
+        prewarmedContextRef.current = null
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume()
+        }
+        console.log(
+          `[AudioStream] using pre-warmed AudioContext, sampleRate=${audioContext.sampleRate}`,
+        )
+      } else {
+        audioContext = new AudioContext({ sampleRate: 16000 })
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume()
+        }
+        console.log(
+          `[AudioStream] created fresh AudioContext, sampleRate=${audioContext.sampleRate}`,
+        )
       }
-      console.log(
-        `[AudioStream] requested sampleRate=16000, actual sampleRate=${audioContext.sampleRate}`,
-      )
-      const workletUrl = resolvePublicUrl('/StreamedAudioProcessor.js')
-      console.log(`[AudioStream] loading worklet: ${workletUrl}`)
-      await audioContext.audioWorklet.addModule(workletUrl)
+
+      if (!prewarmedWorkletUrlRef.current) {
+        const workletUrl = resolvePublicUrl('/StreamedAudioProcessor.js')
+        console.log(`[AudioStream] loading worklet: ${workletUrl}`)
+        await audioContext.audioWorklet.addModule(workletUrl)
+      } else {
+        prewarmedWorkletUrlRef.current = null
+        console.log('[AudioStream] worklet already loaded from prewarm')
+      }
 
       const source = audioContext.createMediaStreamSource(stream)
       const workletNode = new AudioWorkletNode(audioContext, 'pcm-processor')
@@ -274,6 +315,8 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
     }
 
     setSampleRate(null)
+    prewarmedContextRef.current = null
+    prewarmedWorkletUrlRef.current = null
     resetMicLevel()
     setRecordState(AudioRecordState.NOT_RECORDING)
     eventEmitter.emit(
@@ -317,6 +360,7 @@ export const useAudioStream: PCMStreamHook = onPCMData => {
     sampleRate: sampleRate,
     startRecord: startRecord,
     stopRecord: stopRecord,
+    prewarm: prewarm,
     checkDevice: checkDevice,
     onRecordStateChange: onRecordStateChange,
     offRecordStateChange: offRecordStateChange,

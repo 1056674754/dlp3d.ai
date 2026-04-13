@@ -64,6 +64,24 @@ import {
 } from '@/library/babylonjs/runtime/character/emotions'
 import i18n from '@/i18n/config'
 
+/** Resolves the pending `wait()` promise on `notify()`. */
+class Signal {
+  private _resolve: (() => void) | null = null
+
+  wait(): Promise<void> {
+    return new Promise(r => {
+      this._resolve = r
+    })
+  }
+
+  notify(): void {
+    if (this._resolve) {
+      this._resolve()
+      this._resolve = null
+    }
+  }
+}
+
 /**
  * Finite state machine that controls the core functionality of the 3DAC system.
  *
@@ -85,6 +103,7 @@ export class StateMachine {
    * Whether the state machine is currently running.
    */
   private _running: boolean = false
+  private _messageSignal: Signal = new Signal()
   /**
    * The global state object containing shared system state.
    */
@@ -159,6 +178,8 @@ export class StateMachine {
    * Checked between async stages in _startUserAudioStreaming() to abort early.
    */
   private _startRecordingAborted: boolean = false
+  private _audioPreWarmed: boolean = false
+  private _wsPoolPreConnected: boolean = false
   /**
    * Timestamp when the current actor response wait cycle started.
    */
@@ -353,8 +374,10 @@ export class StateMachine {
         )
       }
 
-      // Add a small delay to prevent CPU overuse
-      await new Promise(resolve => setTimeout(resolve, 33.3)) // ~30fps
+      await Promise.race([
+        this._messageSignal.wait(),
+        new Promise(resolve => setTimeout(resolve, 100)),
+      ])
     }
   }
 
@@ -814,6 +837,9 @@ export class StateMachine {
       )
 
       this._updateRelationshipAndEmotion(false)
+
+      // Start pre-warming WS pool — won't block state transition
+      this._preConnectPool().catch(() => {})
 
       await this._switchState(States.WAITING_FOR_ALGORITHM_READY_ON_START)
     } catch (e) {
@@ -1300,6 +1326,15 @@ export class StateMachine {
    * and switches to WAITING_FOR_ACTOR_DIRECT_ANIMATION_FINISHED.
    */
   async idle() {
+    if (!this._audioPreWarmed && this._globalState.audioStreamState) {
+      this._globalState.audioStreamState.prewarm().catch(() => {})
+      this._audioPreWarmed = true
+    }
+    if (!this._wsPoolPreConnected) {
+      this._wsPoolPreConnected = true
+      this._preConnectPool().catch(() => {})
+    }
+
     const message = this._getConditionNoWait()
     if (message === null) {
       return
@@ -1950,6 +1985,7 @@ export class StateMachine {
     errorBus.emit('error', payload)
 
     this._running = false
+    this._messageSignal.notify()
   }
 
   /**
@@ -2106,6 +2142,7 @@ export class StateMachine {
       this._startRecordingAborted = true
     }
     this._eventQueue.enqueue(conditionedMessage)
+    this._messageSignal.notify()
   }
 
   /**
@@ -2173,6 +2210,11 @@ export class StateMachine {
     if (targetState === States.WAITING_FOR_USER_STOP_RECORDING) {
       this._listeningStateEnteredAt = Date.now()
       this._drainStaleVadSilence()
+    }
+
+    // Reset WS pool flag when entering IDLE so pool re-connects for next round
+    if (targetState === States.IDLE) {
+      this._wsPoolPreConnected = false
     }
 
     this.onStateChangedObservable.notifyObservers()
@@ -2362,11 +2404,25 @@ export class StateMachine {
     this._orchestratorStreamingClient = newClient
     await newClient.resetRuntimeStreamed()
     if (this._startRecordingAborted) return false
-    await newClient.run()
-    if (this._startRecordingAborted) return false
-    await this._globalState.audioStreamState?.startRecord()
+
+    // Try to inject a pre-warmed WS from the pool to skip handshake latency
+    const poolUrl = `wss://${requestDict['orchestratorHost']}:${requestDict['orchestratorPort']}${requestDict['orchestratorPathPrefix']}/${orchestratorPath}`
+    const warmSocket = this._globalState.wsConnectionPool.acquire(poolUrl)
+    if (warmSocket) {
+      this._globalState.webSocketState.injectExistingSocket(warmSocket, poolUrl)
+      Logger.debug('[FSM] Using pre-warmed WS from pool')
+    } else {
+      Logger.debug('[FSM] No pre-warmed WS available, will create new connection')
+    }
+
+    await Promise.all([
+      newClient.run(),
+      this._globalState.audioStreamState?.startRecord() ?? Promise.resolve(),
+    ])
+
     if (this._startRecordingAborted) {
-      await this._globalState.audioStreamState?.stopRecord()
+      this._globalState.audioStreamState?.stopRecord()
+      this._orchestratorStreamingClient?.interrupt()
       return false
     }
     Logger.log('Microphone is now enabled for user streaming turn')
@@ -2407,6 +2463,40 @@ export class StateMachine {
     await this._orchestratorStreamingClient?.sendStopAudioStreamingMessage()
   }
 
+  /**
+   * Compute the WebSocket URL used for audio-chat recording rounds.
+   * Mirrors the logic in `_startUserAudioStreaming` so that pool preConnect
+   * targets the exact same endpoint.
+   */
+  private async _computeRecordingWsUrl(): Promise<string> {
+    const host = await this._configSync.getItem('orchestratorHost')
+    const port = await this._configSync.getItem('orchestratorPort')
+    const pathPrefix = await this._configSync.getItem('orchestratorPathPrefix')
+    const audioChatPath = await this._configSync.getItem('orchestratorAudioChatPath')
+    const realtimeAudioChatPath = await this._configSync.getItem('orchestratorRealtimeAudioChatPath')
+    const conversationAdapter = (await this._configSync.getItem('conversationAdapter')) || ''
+    const useRealtimeAudioConversation = [
+      'openai_audio_agent',
+      'qwen_omni_realtime_agent',
+      'volcengine_realtime_voice_agent',
+    ].includes(conversationAdapter)
+    const orchestratorPath = useRealtimeAudioConversation ? realtimeAudioChatPath : audioChatPath
+    return `wss://${host}:${port}${pathPrefix}/${orchestratorPath}`
+  }
+
+  /**
+   * Pre-open a WebSocket into the connection pool so the next recording round
+   * can skip the handshake latency. Fire-and-forget — failures are swallowed.
+   */
+  private async _preConnectPool(): Promise<void> {
+    try {
+      const url = await this._computeRecordingWsUrl()
+      await this._globalState.wsConnectionPool.preConnect(url)
+    } catch (e) {
+      Logger.debug(`[FSM] WS pool preConnect failed: ${e}`)
+    }
+  }
+
   private _maybeResumeWakeWord() {
     if (typeof window === 'undefined') return
     const w = window as unknown as {
@@ -2417,6 +2507,8 @@ export class StateMachine {
     if (w.NativeAPI) {
       w.NativeAPI.sendEvent('voice:resumeListening', {})
     }
+    // Re-open pool for next round
+    this._preConnectPool().catch(() => {})
   }
 
   /**
@@ -2779,5 +2871,7 @@ export class StateMachine {
   /**
    * Dispose of the state machine and clean up resources.
    */
-  public dispose() {}
+  public dispose() {
+    this._messageSignal.notify()
+  }
 }

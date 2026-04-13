@@ -234,6 +234,39 @@ const useWebSocket = (initialUrl?: string): WebSocketState => {
     })
   }
 
+  const injectExistingSocket = useCallback((ws: WebSocket, url: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.close()
+    }
+    urlRef.current = url
+    wsRef.current = ws
+    ws.binaryType = 'arraybuffer'
+    setConnectionState(WebSocketConnectionState.CONNECTED)
+    eventEmitter.emit(
+      WebSocketEvents.CONNECTION_STATE,
+      WebSocketConnectionState.CONNECTED,
+    )
+    // Restore full handler lifecycle so connection state stays in sync
+    if (messageHandlerRef.current) {
+      ws.onmessage = messageHandlerRef.current
+    }
+    ws.onclose = () => {
+      setConnectionState(WebSocketConnectionState.DISCONNECTED)
+      eventEmitter.emit(
+        WebSocketEvents.CONNECTION_STATE,
+        WebSocketConnectionState.DISCONNECTED,
+      )
+      wsRef.current = null
+    }
+    ws.onerror = () => {
+      setConnectionState(WebSocketConnectionState.DISCONNECTED)
+      eventEmitter.emit(
+        WebSocketEvents.CONNECTION_STATE,
+        WebSocketConnectionState.DISCONNECTED,
+      )
+    }
+  }, [])
+
   /**
    * Disconnect the WebSocket connection if it is currently open.
    */
@@ -389,6 +422,7 @@ const useWebSocket = (initialUrl?: string): WebSocketState => {
     wsRef: wsRef,
     urlRef: urlRef,
     connectWebSocketAndWait: connectWebSocketAndWait,
+    injectExistingSocket: injectExistingSocket,
     disconnectWebSocket: disconnectWebSocket,
     sendMessage: sendMessage,
     sendMessageAndWait: sendMessageAndWait,

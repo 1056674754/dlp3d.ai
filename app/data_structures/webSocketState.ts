@@ -53,6 +53,7 @@ export interface WebSocketState {
    * @returns Promise that resolves when the connection is open.
    */
   connectWebSocketAndWait: (url?: string) => Promise<void>
+  injectExistingSocket: (ws: WebSocket, url: string) => void
   /**
    * Close the WebSocket connection if currently open.
    */
