@@ -254,58 +254,46 @@ async function handleVoskResult(resultText: string): Promise<void> {
   const state = store.getState().wakeWord;
   if (!state.isListening) return;
 
-  try {
-    const parsed = JSON.parse(resultText);
-    const text: string = parsed.text ?? '';
-    const confidence: number = parsed.confidence ?? 1.0;
+  // The Kotlin layer (VoskModule.onResult) already extracts the "text" field
+  // from the Vosk hypothesis JSON — resultText is the plain recognised string,
+  // e.g. "嘿你好" or "[unk]", NOT raw JSON.
+  const text = resultText.trim();
+  if (!text || text === '[unk]') return;
 
-    if (!text || text === '[unk]') return;
+  const effectiveKeywords = resolveEffectiveKeywords();
+  const lowerText = text.toLowerCase().replace(/\s+/g, '');
+  const matchedKeyword = effectiveKeywords.find(kw =>
+    lowerText.includes(kw.toLowerCase().replace(/\s+/g, '')),
+  );
 
-    const effectiveKeywords = resolveEffectiveKeywords();
-    const lowerText = text.toLowerCase().replace(/\s+/g, '');
-    const matchedKeyword = effectiveKeywords.find(kw =>
-      lowerText.includes(kw.toLowerCase().replace(/\s+/g, '')),
-    );
+  if (!matchedKeyword) return;
 
-    if (!matchedKeyword) return;
+  pushDebugLog(
+    'wake',
+    `Wake word detected: "${matchedKeyword}" (raw: "${text}")`,
+  );
 
-    if (confidence < DEFAULT_CONFIDENCE_THRESHOLD) {
-      pushDebugLog(
-        'wake',
-        `Wake word "${matchedKeyword}" below threshold: ${confidence}`,
-      );
-      return;
-    }
+  store.dispatch(setWakeWordDetected(matchedKeyword));
 
-    pushDebugLog(
-      'wake',
-      `Wake word detected: "${matchedKeyword}" (confidence: ${confidence.toFixed(2)})`,
-    );
+  // Stop Vosk and start native audio stream for conversation
+  // Vosk and AudioStream share the microphone — can't run both
+  stopWakeWordListening();
 
-    store.dispatch(setWakeWordDetected(matchedKeyword));
+  // Wait for Vosk to fully release the microphone before starting AudioRecord.
+  // Without this delay, AudioRecord may capture stale data from Vosk's buffer
+  // or fail to initialize properly because the mic hardware is still in transition.
+  await new Promise(resolve => setTimeout(resolve, 300));
 
-    // Stop Vosk and start native audio stream for conversation
-    // Vosk and AudioStream share the microphone — can't run both
-    stopWakeWordListening();
-
-    // Wait for Vosk to fully release the microphone before starting AudioRecord.
-    // Without this delay, AudioRecord may capture stale data from Vosk's buffer
-    // or fail to initialize properly because the mic hardware is still in transition.
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    if (isNativeAudioAvailable()) {
-      startNativeAudioStream().catch(e => {
-        pushDebugLog('wake', `Failed to start native audio: ${e}`);
-      });
-    }
-
-    bridge.send({
-      type: 'voice:wake',
-      payload: { keyword: matchedKeyword, confidence },
+  if (isNativeAudioAvailable()) {
+    startNativeAudioStream().catch(e => {
+      pushDebugLog('wake', `Failed to start native audio: ${e}`);
     });
-  } catch (e) {
-    pushDebugLog('wake', `Failed to parse result: ${resultText}`);
   }
+
+  bridge.send({
+    type: 'voice:wake',
+    payload: { keyword: matchedKeyword, confidence: 1.0 },
+  });
 }
 
 // ---------------------------------------------------------------------------
